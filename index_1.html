@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<title>EVE Dashboard</title>
+<style>
+  :root{
+    --bg:#0d1117; --card:#161b22; --card2:#21262d; --band:#11161d; --border:#2a323d; --line:#21262d;
+    --text:#e6edf3; --muted:#9aa6b2; --accent:#4fb3ff; --accent-dim:#16364f;
+    --ok:#3fb950; --ok-dim:#12301b; --warn:#e3b341; --warn-dim:#3a2e0f; --bad:#f85149; --bad-dim:#3d1414;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  body{padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+  .wrap{max-width:1440px;margin:0 auto}
+  a{color:var(--accent)}
+  button,select,input{font:inherit;color:var(--text)}
+  button{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;min-height:40px}
+  button:active{transform:scale(.98)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  button.link{background:none;border:none;padding:4px 6px;color:var(--muted);min-height:0}
+  button.danger{color:var(--bad)}
+  select,input{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;min-height:40px}
+  .muted{color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px}
+  header.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
+  header.top h1{font-size:20px;font-weight:600;margin:0}
+  .actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .sync{font-size:12px;color:var(--muted);margin-right:4px}
+  .chip{font-size:12px;padding:4px 10px;border-radius:999px;white-space:nowrap;display:inline-block}
+  .chip.sm{font-size:11px;padding:2px 8px}
+  .c-ok{background:var(--ok-dim);color:var(--ok)} .c-warn{background:var(--warn-dim);color:var(--warn)}
+  .c-bad{background:var(--bad-dim);color:var(--bad)} .c-info{background:var(--accent-dim);color:var(--accent)}
+  .c-mute{background:var(--card2);color:var(--muted)}
+  .attention{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}
+  .attention b{font-size:13px;font-weight:600;margin-right:2px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .tile{padding:10px 14px}
+  .tile span{display:block;font-size:12px;color:var(--muted)} .tile strong{font-size:19px;font-weight:600}
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;flex-wrap:wrap}
+  .main{display:flex;gap:16px;align-items:flex-start}
+  #overview{flex:1;min-width:0;overflow-x:auto}
+  #detail{flex:0 0 400px;padding:16px;display:none}
+  body.has-detail #detail{display:block}
+  .row,.thead{display:grid;grid-template-columns:36px minmax(150px,1.3fr) minmax(160px,1.4fr) 100px 100px minmax(130px,1fr) minmax(110px,.9fr);
+    gap:10px;align-items:center;padding:8px 12px}
+  .thead{font-size:12px;color:var(--muted);padding-top:10px;padding-bottom:10px}
+  .row{border-top:1px solid var(--line);color:var(--text);text-decoration:none;font-size:13px;min-height:52px}
+  .row:hover,.row.sel{background:#1a212a}
+  .row .nm{font-size:14px;font-weight:500}
+  .ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .group{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 12px;background:var(--band);border-top:1px solid var(--border);font-size:13px}
+  .group strong{font-weight:600}
+  .portrait{width:32px;height:32px;border-radius:50%;background:var(--card2);object-fit:cover;display:block}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+  .st{display:flex;align-items:center;gap:6px;min-width:0}
+  .m{display:none}
+  .bar{height:6px;background:var(--card2);border-radius:3px;overflow:hidden;margin:6px 0}
+  .bar>div{height:100%;background:var(--accent);width:0}
+  .kv{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:7px 0;border-top:1px solid var(--line)}
+  .kv span:first-child{color:var(--muted)} .kv span:last-child{text-align:right;min-width:0}
+  #detail h2{font-size:17px;margin:0} #detail h3{font-size:13px;color:var(--muted);font-weight:600;margin:18px 0 4px}
+  .dhead{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+  .dhead img{width:56px;height:56px;border-radius:50%;background:var(--card2)}
+  .back{display:none;margin-bottom:10px}
+  .err{font-size:13px;color:var(--bad);margin:8px 0}
+  .empty{text-align:center;padding:40px 16px}
+  .settings{padding:16px;max-width:760px}
+  .settings h2{font-size:17px;margin:0 0 4px} .settings h3{font-size:14px;margin:20px 0 6px}
+  .srow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);flex-wrap:wrap}
+  .srow label{flex:1 1 180px;font-size:14px}
+  .srow input{flex:0 1 220px}
+  @media (max-width:900px){
+    .thead{display:none}
+    .row{grid-template-columns:36px 1fr auto;gap:10px}
+    .row .d{display:none}
+    .m{display:flex}
+    body.has-detail #overview, body.has-detail .attention, body.has-detail .tiles, body.has-detail .toolbar{display:none}
+    #detail{flex:1 1 auto;width:100%}
+    .main{display:block}
+    .back{display:inline-block}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>EVE Dashboard</h1>
+    <div class="actions">
+      <span class="sync" id="synced"></span>
+      <button class="link" id="refreshBtn" aria-label="Refresh now">⟳ Refresh</button>
+      <button id="settingsBtn">Accounts</button>
+      <button id="addBtn">+ Add character</button>
+    </div>
+  </header>
+  <div class="err" id="globalErr"></div>
+  <div id="app"></div>
+</div>
+
+<script>
+/* ---------- Config ---------- */
+const CLIENT_ID = "28bb45097b894b8fa8885427fd253f28";
+// Scopes requested at login. Only ask for scopes ticked on the developer portal.
+// Every scope enabled on the app (read + action) is requested up front so new modules don't need a re-login.
+const SCOPES = [
+  // action scopes (approved by owner 2026-11-13)
+  "esi-ui.open_window.v1", "esi-ui.write_waypoint.v1",
+  "esi-calendar.respond_calendar_events.v1", "esi-fleets.write_fleet.v1",
+  "esi-fittings.write_fittings.v1", "esi-mail.organize_mail.v1",
+  "esi-characters.write_contacts.v1", "esi-mail.send_mail.v1",
+  "publicData",
+  // skills, clones, character
+  "esi-skills.read_skills.v1", "esi-skills.read_skillqueue.v1",
+  "esi-clones.read_clones.v1", "esi-clones.read_implants.v1",
+  "esi-characters.read_contacts.v1", "esi-characters.read_loyalty.v1",
+  "esi-characters.read_chat_channels.v1", "esi-characters.read_medals.v1",
+  "esi-characters.read_standings.v1", "esi-characters.read_agents_research.v1",
+  "esi-characters.read_blueprints.v1", "esi-characters.read_corporation_roles.v1",
+  "esi-characters.read_fatigue.v1", "esi-characters.read_notifications.v1",
+  "esi-characters.read_titles.v1", "esi-characters.read_fw_stats.v1",
+  "esi-characters.read_freelance_jobs.v1",
+  // location, wallet, assets, industry, markets, contracts
+  "esi-location.read_location.v1", "esi-location.read_ship_type.v1", "esi-location.read_online.v1",
+  "esi-wallet.read_character_wallet.v1", "esi-assets.read_assets.v1",
+  "esi-industry.read_character_jobs.v1", "esi-industry.read_character_mining.v1",
+  "esi-markets.read_character_orders.v1", "esi-markets.structure_markets.v1",
+  "esi-contracts.read_character_contracts.v1",
+  // other character reads
+  "esi-calendar.read_calendar_events.v1", "esi-mail.read_mail.v1",
+  "esi-killmails.read_killmails.v1", "esi-fittings.read_fittings.v1",
+  "esi-planets.manage_planets.v1", /* despite the name, ESI only offers read routes for this */
+  "esi-fleets.read_fleet.v1",
+  "esi-search.search_structures.v1", "esi-universe.read_structures.v1",
+  "esi-structures.read_character.v1", "esi-activities.read_character.v1",
+  "esi-access.read_lists.v1", "esi.activity.char:read", "esi.cosmetic.char:read",
+  // corporation / alliance reads (only return data if the character has the corp roles)
+  "esi-wallet.read_corporation_wallet.v1", "esi-wallet.read_corporation_wallets.v1",
+  "esi-corporations.read_corporation_membership.v1", "esi-corporations.read_structures.v1",
+  "esi-corporations.track_members.v1", "esi-corporations.read_divisions.v1",
+  "esi-corporations.read_contacts.v1", "esi-corporations.read_titles.v1",
+  "esi-corporations.read_blueprints.v1", "esi-corporations.read_standings.v1",
+  "esi-corporations.read_starbases.v1", "esi-corporations.read_container_logs.v1",
+  "esi-corporations.read_facilities.v1", "esi-corporations.read_medals.v1",
+  "esi-corporations.read_fw_stats.v1", "esi-corporations.read_projects.v1",
+  "esi-corporations.read_freelance_jobs.v1", "esi-structures.read_corporation.v1",
+  "esi-killmails.read_corporation_killmails.v1", "esi-assets.read_corporation_assets.v1",
+  "esi-contracts.read_corporation_contracts.v1", "esi-industry.read_corporation_jobs.v1",
+  "esi-industry.read_corporation_mining.v1", "esi-markets.read_corporation_orders.v1",
+  "esi-planets.read_customs_offices.v1", "esi-alliances.read_contacts.v1"
+];
+const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, "");   // register this exact URL as the Callback URL
+const SSO = "https://login.eveonline.com/v2/oauth";
+const ESI = "https://esi.evetech.net";
+const COMPAT_DATE = "2020-01-01";
+// ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
+const APP_ID = "EVE-Dashboard/1.1 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const REFRESH_MS = 5 * 60 * 1000;
+
+/* ---------- Storage ---------- */
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} },
+  del(k){ try{ localStorage.removeItem(k); }catch{} }
+};
+let chars = store.get("eve.chars", {});           // id -> {id,name,access,refresh,expires}
+
+/* ---------- PKCE helpers ---------- */
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const randStr = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
+async function sha256(s){ return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)); }
+function parseJwt(t){
+  const p = t.split(".")[1].replace(/-/g,"+").replace(/_/g,"/");
+  return JSON.parse(decodeURIComponent(escape(atob(p))));
+}
+
+async function startLogin(){
+  const verifier = randStr(32), state = randStr(16);
+  store.set("eve.pkce", {verifier, state});
+  const challenge = b64url(await sha256(verifier));
+  const q = new URLSearchParams({
+    response_type:"code", redirect_uri:REDIRECT_URI, client_id:CLIENT_ID,
+    scope:SCOPES.join(" "), code_challenge:challenge, code_challenge_method:"S256", state
+  });
+  location.href = `${SSO}/authorize?${q}`;
+}
+
+async function tokenRequest(params){
+  const r = await fetch(`${SSO}/token`, {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({...params, client_id:CLIENT_ID})
+  });
+  if(!r.ok) throw Object.assign(new Error(`Login service returned ${r.status}`), {status:r.status});
+  return r.json();
+}
+
+function saveTokens(tok){
+  const claims = parseJwt(tok.access_token);
+  const id = claims.sub.split(":").pop();
+  chars[id] = { id, name:claims.name, access:tok.access_token, refresh:tok.refresh_token,
+                expires:Date.now() + (tok.expires_in - 60) * 1000 };
+  store.set("eve.chars", chars);
+  return id;
+}
+
+async function handleCallback(){
+  const p = new URLSearchParams(location.search);
+  if(p.has("error")){ store.del("eve.pkce"); history.replaceState(null, "", REDIRECT_URI); throw new Error("Login was cancelled or refused."); }
+  if(!p.has("code")) return;
+  const saved = store.get("eve.pkce", {});
+  history.replaceState(null, "", REDIRECT_URI);
+  if(p.get("state") !== saved.state) throw new Error("Login check failed (state mismatch). Try adding the character again.");
+  const tok = await tokenRequest({grant_type:"authorization_code", code:p.get("code"), code_verifier:saved.verifier});
+  store.del("eve.pkce");
+  saveTokens(tok);
+}
+
+const pendingRefresh = {};   // one refresh per character at a time (EVE rotates refresh tokens)
+function accessToken(c){
+  if(Date.now() < c.expires) return Promise.resolve(c.access);
+  return pendingRefresh[c.id] ||= (async () => {
+    const tok = await tokenRequest({grant_type:"refresh_token", refresh_token:c.refresh});
+    if(!chars[c.id]) return tok.access_token;   // removed while refreshing: don't re-add
+    saveTokens(tok);
+    return chars[c.id].access;
+  })().finally(() => delete pendingRefresh[c.id]);
+}
+
+/* ---------- App data ---------- */
+const names = store.get("eve.names", {});          // id -> name (skills, ships, systems, stations, corps, structures "s<id>")
+let meta = store.get("eve.meta", {accountOf:{}, omega:{}});   // manual: character -> account label, account -> Omega expiry (YYYY-MM-DD)
+let sortBy = store.get("eve.sort", "account");
+const data = {};                                   // id -> {queue, skills, wallet, location, ship, corpId, error}
+
+/* ---------- ESI ---------- */
+// When EVE says slow down (420/429), is down (502-504), or we're close to its error limit,
+// stop ALL calls until it says we can resume. Nothing is sent while paused.
+let pausedUntil = 0, pauseReason = "";
+function pause(seconds, why){
+  const until = Date.now() + Math.max(seconds || 60, 10) * 1000;
+  if(until > pausedUntil){ pausedUntil = until; pauseReason = why; }
+}
+const isPaused = () => Date.now() < pausedUntil;
+
+async function esi(path, token, opts={}){
+  if(isPaused()) throw Object.assign(new Error("Paused: " + pauseReason), {status:"paused"});
+  const headers = {"X-Compatibility-Date":COMPAT_DATE, "X-User-Agent":APP_ID, "Accept":"application/json"};
+  if(token) headers.Authorization = `Bearer ${token}`;
+  if(opts.body) headers["Content-Type"] = "application/json";
+  const r = await fetch(ESI + path, {method:opts.method||"GET", headers, body:opts.body});
+  const errRemain = r.headers.get("x-esi-error-limit-remain"), errReset = +r.headers.get("x-esi-error-limit-reset");
+  if(errRemain !== null && +errRemain <= 10) pause(errReset, "close to EVE's error limit");
+  if(r.status === 420) pause(errReset, "EVE's error limit was reached");
+  else if(r.status === 429) pause(+r.headers.get("retry-after"), "EVE's rate limit was reached");
+  else if(r.status >= 502 && r.status <= 504) pause(60, "EVE's servers are having problems");
+  if(!r.ok) throw Object.assign(new Error(`EVE returned ${r.status} for ${path.split("/").filter(Boolean).slice(-1)[0]}`), {status:r.status});
+  return r.json();
+}
+
+async function resolveNames(ids){
+  const missing = [...new Set(ids.filter(Boolean))].filter(id => !names[id]);
+  for(let i=0;i<missing.length;i+=500){
+    const chunk = missing.slice(i,i+500);
+    try{
+      const res = await esi("/universe/names", null, {method:"POST", body:JSON.stringify(chunk)});
+      res.forEach(n => names[n.id] = n.name);
+    }catch(e){
+      // a single unknown ID makes the whole batch 404: only then fall back to one at a time
+      if(e.status !== 404) return;
+      for(const id of chunk){
+        try{ const [n] = await esi("/universe/names", null, {method:"POST", body:JSON.stringify([id])}); names[n.id] = n.name; }
+        catch(e){ if(e.status === 404) names[id] = "Unknown"; else break; }
+      }
+    }
+  }
+  store.set("eve.names", names);
+}
+
+async function resolveStructure(id, token){
+  const key = "s" + id;
+  if(names[key]) return;
+  try{ names[key] = (await esi(`/universe/structures/${id}`, token)).name; }
+  catch(e){ if(e.status === 403 || e.status === 404) names[key] = "Player structure"; else return; }   // no docking access: don't keep retrying
+  store.set("eve.names", names);
+}
+
+const refused = {};   // "<charId>:<route>" -> true after a 403, so it isn't retried every refresh this session
+function extra(c, route, fn){
+  const key = c.id + ":" + route;
+  if(refused[key]) return Promise.resolve(null);
+  return fn().catch(e => { if(e.status === 403) refused[key] = true; throw e; });
+}
+
+async function loadChar(c){
+  if(isPaused()) return;                       // keep last good data; try again after the pause
+  if(data[c.id]?.authError) return;            // needs "Sign in again"; don't keep sending failing requests
+  try{
+    const t = await accessToken(c);
+    const [queue, skills] = await Promise.all([
+      esi(`/characters/${c.id}/skillqueue`, t),
+      esi(`/characters/${c.id}/skills`, t)
+    ]);
+    // extras: a failure here shouldn't hide the skill queue
+    const [wallet, location, ship, pub] = (await Promise.allSettled([
+      extra(c, "wallet",   () => esi(`/characters/${c.id}/wallet`, t)),
+      extra(c, "location", () => esi(`/characters/${c.id}/location`, t)),
+      extra(c, "ship",     () => esi(`/characters/${c.id}/ship`, t)),
+      esi(`/characters/${c.id}`, null)          // public, cached 24h by EVE (the browser serves repeats from its cache)
+    ])).map(r => r.status === "fulfilled" ? r.value : null);
+    queue.sort((a,b) => a.queue_position - b.queue_position);
+    if(location?.structure_id) await resolveStructure(location.structure_id, t);
+    await resolveNames([...queue.map(q => q.skill_id), ship?.ship_type_id, location?.solar_system_id,
+                        location?.station_id, pub?.corporation_id]);
+    if(chars[c.id]) data[c.id] = {queue, skills, wallet, location, ship, corpId:pub?.corporation_id};   // also clears any old error
+  }catch(e){
+    if(e.status === "paused") return;          // not this character's fault; keep last good data
+    const auth = [400,401,403].includes(e.status);
+    if(chars[c.id]) data[c.id] = {...(data[c.id]||{}), error:e.message, authError:auth};
+  }
+}
+
+// a few characters at a time, so 28+ characters don't flood EVE with requests
+async function pool(items, n, fn){
+  const q = [...items];
+  await Promise.all(Array.from({length:Math.min(n, q.length)}, async () => { while(q.length) await fn(q.shift()); }));
+}
+
+let lastSync = 0, syncing = false;
+async function refreshAll(){
+  if(syncing) return;
+  syncing = true;
+  const live = () => { if(route().view !== "accounts") render(); };   // re-rendering the Accounts page would wipe what's being typed
+  let ran = 0;
+  try{ await pool(Object.values(chars), 4, async c => { if(!isPaused()) { ran++; await loadChar(c); live(); } }); }
+  finally{
+    syncing = false;
+    if(ran) lastSync = Date.now();   // a refresh skipped entirely by a pause doesn't count as fresh data
+    schedulePoll();                  // always re-arm, even if drawing the page failed
+  }
+  live();
+}
+
+// Next refresh 5 minutes after this one finished (or when a pause ends, if later).
+// If the page is hidden when the timer fires, nothing is sent until it's opened again.
+let pollTimer;
+function schedulePoll(){
+  clearTimeout(pollTimer);
+  const wait = Math.max(REFRESH_MS, pausedUntil - Date.now() + 1000);
+  pollTimer = setTimeout(() => { if(!document.hidden) refreshAll(); }, wait);
+}
+
+/* ---------- Derived values ---------- */
+const ROMAN = ["","I","II","III","IV","V"];
+const DAY = 864e5;
+const fmtSP = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n);
+const fmtISK = v => v == null ? "—" : v >= 1e12 ? (v/1e12).toFixed(2)+"T" : v >= 1e9 ? (v/1e9).toFixed(2)+"B" : v >= 1e6 ? (v/1e6).toFixed(1)+"M" : Math.round(v).toLocaleString();
+function fmtDur(ms){
+  if(ms <= 0) return "done";
+  const d=Math.floor(ms/DAY), h=Math.floor(ms%DAY/36e5), m=Math.floor(ms%36e5/6e4), s=Math.floor(ms%6e4/1e3);
+  return d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+const skillLabel = q => `${names[q.skill_id] || "Skill " + q.skill_id} ${ROMAN[q.finished_level] || ""}`;
+const accountOf = id => meta.accountOf[id] || "";
+
+function info(id){
+  const d = data[id] || {}, now = Date.now();
+  const r = {id, name:chars[id].name, error:d.error, authError:d.authError, loading:!d.queue && !d.error, wallet:d.wallet,
+             freeSP:d.skills?.unallocated_sp || 0, totalSP:d.skills?.total_sp, account:accountOf(id),
+             corp:names[d.corpId] || "", system:names[d.location?.solar_system_id] || "",
+             ship:names[d.ship?.ship_type_id] || "", shipName:d.ship?.ship_name || ""};
+  r.docked = d.location?.station_id ? names[d.location.station_id] : d.location?.structure_id ? names["s"+d.location.structure_id] : "";
+  if(r.error && (r.authError || !d.queue)){ r.status="bad"; r.label=r.authError ? "Sign in again" : "Couldn't load, will retry"; r.queueEnd=-Infinity; return r; }
+  if(r.loading){ r.status="mute"; r.label="Loading…"; r.queueEnd=Infinity; return r; }
+  const active = d.queue.filter(q => !q.finish_date || Date.parse(q.finish_date) > now);
+  r.active = active;
+  if(!active.length){ r.status="bad"; r.label="Queue empty"; r.queueEnd=-1; }
+  else if(!active[0].finish_date){ r.status="bad"; r.label="Queue paused"; r.queueEnd=-1; r.next=skillLabel(active[0]); }
+  else{
+    r.cur = active[0]; r.training = skillLabel(r.cur);
+    r.skillEnd = Date.parse(r.cur.finish_date); r.skillStart = Date.parse(r.cur.start_date) || now;
+    r.queueEnd = Date.parse(active[active.length-1].finish_date);
+    r.status = r.queueEnd - now < DAY ? "warn" : "ok";
+    r.label = r.status === "warn" ? "Ends in < 24h" : "Training";
+  }
+  return r;
+}
+const DOT = {ok:"var(--ok)", warn:"var(--warn)", bad:"var(--bad)", mute:"var(--muted)"};
+
+function omegaInfo(label){
+  const date = meta.omega[label];
+  if(!label || !date) return null;
+  const left = Date.parse(date + "T11:00:00Z") - Date.now();   // treat expiry as downtime (11:00 UTC) on that day
+  if(left <= 0) return {cls:"c-bad", text:"Omega expired"};
+  const days = Math.ceil(left / DAY);
+  return {cls: days <= 7 ? "c-warn" : "c-ok", text:`Omega · ${days}d left`, days};
+}
+
+/* ---------- Rendering ---------- */
+function route(){ const h = location.hash; return h.startsWith("#c/") ? {view:"detail", id:h.slice(3)} : h === "#accounts" ? {view:"accounts"} : {view:"overview"}; }
+
+let nextFinishTimer;
+function render(){
+  clearTimeout(nextFinishTimer);
+  const app = document.getElementById("app"), ids = Object.keys(chars), r = route();
+  document.body.classList.toggle("has-detail", r.view === "detail" && !!chars[r.id]);
+  if(!ids.length){
+    app.innerHTML = `<div class="card empty"><h2>No characters yet</h2>
+      <p class="muted">Sign in with EVE Online to add your characters.</p>
+      <button class="primary" onclick="startLogin()">Add your first character</button></div>`;
+    return;
+  }
+  if(r.view === "accounts"){ app.innerHTML = accountsView(ids); return; }
+  const all = ids.map(info);
+  app.innerHTML = attentionHtml(all) + tilesHtml(all) + toolbarHtml() +
+    `<div class="main"><div id="overview" class="card">${overviewHtml(all, r.id)}</div>
+     <aside id="detail" class="card">${chars[r.id] ? detailHtml(info(r.id)) : ""}</aside></div>`;
+  const ends = all.flatMap(x => (x.active||[]).map(q => Date.parse(q.finish_date))).filter(t => t > Date.now());
+  if(ends.length) nextFinishTimer = setTimeout(render, Math.min(Math.min(...ends) - Date.now() + 1000, 2**31 - 1));   // redraw only: no EVE calls
+  tick();
+}
+
+function attentionHtml(all){
+  const n = f => all.filter(f).length, items = [];
+  const signin = n(x => x.authError), failing = n(x => x.error && !x.authError && x.status === "bad"), stopped = n(x => !x.error && x.status === "bad"), soon = n(x => x.status === "warn"),
+        free = n(x => x.freeSP > 0);
+  const labels = [...new Set(all.map(x => x.account).filter(Boolean))];
+  const omegaSoon = labels.filter(l => { const o = omegaInfo(l); return o && o.cls !== "c-ok"; }).length;
+  if(signin) items.push(`<span class="chip c-bad">${signin} need to sign in again</span>`);
+  if(failing) items.push(`<span class="chip c-bad">${failing} couldn't load (retrying)</span>`);
+  if(stopped) items.push(`<span class="chip c-bad">${stopped} skill queue${stopped>1?"s":""} stopped</span>`);
+  if(soon) items.push(`<span class="chip c-warn">${soon} queue${soon>1?"s":""} end in under 24h</span>`);
+  if(omegaSoon) items.push(`<span class="chip c-warn">${omegaSoon} account${omegaSoon>1?"s":""}: Omega ends within 7 days</span>`);
+  if(free) items.push(`<span class="chip c-ok">${free} character${free>1?"s":""} with free SP</span>`);
+  return `<div class="attention"><b>Needs attention</b>${items.length ? items.join("") : `<span class="chip c-mute">All clear</span>`}</div>`;
+}
+
+function tilesHtml(all){
+  const isk = all.reduce((s,x) => s + (x.wallet||0), 0), training = all.filter(x => x.cur).length,
+        free = all.reduce((s,x) => s + x.freeSP, 0);
+  return `<div class="tiles">
+    <div class="card tile"><span>Total ISK</span><strong>${fmtISK(isk)}</strong></div>
+    <div class="card tile"><span>Training</span><strong>${training} / ${all.length}</strong></div>
+    <div class="card tile"><span>Free SP</span><strong>${fmtSP(free)}</strong></div></div>`;
+}
+
+function toolbarHtml(){
+  const opt = (v,t) => `<option value="${v}" ${sortBy===v?"selected":""}>${t}</option>`;
+  return `<div class="toolbar"><label for="sortSel" class="muted">View</label>
+    <select id="sortSel" onchange="setSort(this.value)">
+      ${opt("account","Grouped by account")}${opt("queue","Queue ends soonest")}${opt("wallet","Wallet, highest first")}${opt("name","Name A–Z")}
+    </select></div>`;
+}
+function setSort(v){ sortBy = v; store.set("eve.sort", v); render(); }
+
+function rowHtml(x, sel){
+  const status = x.cur ? `<span class="ell">${esc(x.training)}</span>` : `<span class="ell">${esc(x.label)}${x.next ? " · " + esc(x.next) : ""}</span>`;
+  const queue = x.cur ? `<b data-cd="${x.queueEnd}" style="font-weight:500;color:${x.status==="warn"?"var(--warn)":"inherit"}"></b>` : `<span style="color:${DOT[x.status]}">${x.error ? "Error" : x.loading ? "…" : "Stopped"}</span>`;
+  return `<a class="row ${sel?"sel":""}" href="#c/${x.id}">
+    <img class="portrait" src="https://images.evetech.net/characters/${x.id}/portrait?size=64" alt="">
+    <div style="min-width:0"><div class="nm ell">${esc(x.name)}</div>
+      <div class="m st muted" style="font-size:12px"><span class="dot" style="background:${DOT[x.status]}"></span>${x.cur ? "Queue " : ""}${queue}<span class="ell">· ${fmtISK(x.wallet)}</span></div></div>
+    <div class="d st"><span class="dot" style="background:${DOT[x.status]}"></span>${status}</div>
+    <div class="d">${queue}</div>
+    <div class="d">${fmtISK(x.wallet)}</div>
+    <div class="d ell">${esc([x.system, x.ship].filter(Boolean).join(" · ") || "—")}</div>
+    <div class="d ell muted">${esc(x.corp || "—")}</div>
+    ${x.freeSP ? `<span class="m chip sm c-ok">${fmtSP(x.freeSP)} free</span>` : `<span class="m"></span>`}
+  </a>`;
+}
+
+function overviewHtml(all, selId){
+  const head = `<div class="thead"><span></span><span>Character</span><span>Training</span><span>Queue ends</span><span>Wallet</span><span>Location · ship</span><span>Corporation</span></div>`;
+  if(sortBy !== "account"){
+    const cmp = {queue:(a,b) => a.queueEnd - b.queueEnd, wallet:(a,b) => (b.wallet||0) - (a.wallet||0), name:(a,b) => a.name.localeCompare(b.name)}[sortBy];
+    return head + all.slice().sort(cmp).map(x => rowHtml(x, x.id === selId)).join("");
+  }
+  const groups = Object.create(null);
+  all.forEach(x => (groups[x.account || ""] ||= []).push(x));
+  const labels = Object.keys(groups).sort((a,b) => !a ? 1 : !b ? -1 : a.localeCompare(b, undefined, {numeric:true}));
+  return head + labels.map(l => {
+    const o = omegaInfo(l), list = groups[l].sort((a,b) => a.name.localeCompare(b.name));
+    const alerts = list.filter(x => x.status === "bad" || x.status === "warn").length;
+    return `<div class="group"><strong>${l ? esc(l) : "Unassigned"}</strong>
+      ${o ? `<span class="chip sm ${o.cls}">${o.text}</span>` : l ? `<a href="#accounts" class="chip sm c-mute" style="text-decoration:none">Set Omega date</a>` : `<a href="#accounts" style="font-size:12px">Assign accounts</a>`}
+      <span class="muted" style="font-size:12px">${list.length} character${list.length>1?"s":""}</span>
+      ${alerts ? `<span style="font-size:12px;color:var(--warn)">${alerts} need attention</span>` : ""}</div>` +
+      list.map(x => rowHtml(x, x.id === selId)).join("");
+  }).join("");
+}
+
+function detailHtml(x){
+  const o = omegaInfo(x.account);
+  let queue = "";
+  if(x.error && (x.authError || x.loading === false && !x.active)) queue = `<div class="err">Couldn't load: ${esc(x.error)}.</div>${x.authError ? `<button class="primary" onclick="startLogin()">Sign in again</button>` : `<p class="muted" style="font-size:13px">It will retry automatically.</p>`}`;
+  else if(x.loading) queue = `<p class="muted">Loading…</p>`;
+  else if(!x.cur) queue = `<span class="chip c-bad">${esc(x.label)}${x.next ? " — " + esc(x.next) + " is next" : ""}</span>`;
+  else queue = `<div style="font-size:14px">${esc(x.training)}</div>
+      <div class="bar"><div data-start="${x.skillStart}" data-end="${x.skillEnd}"></div></div>
+      <div class="kv" style="border:0;padding-top:0"><span>Skill</span><span data-cd="${x.skillEnd}"></span></div>
+      <div class="kv"><span>Whole queue</span><span data-cd="${x.queueEnd}" style="color:${x.status==="warn"?"var(--warn)":"inherit"}"></span></div>
+      ${x.active.slice(1).map(q => `<div class="kv"><span class="ell">${esc(skillLabel(q))}</span><span data-cd="${Date.parse(q.finish_date)}"></span></div>`).join("")}`;
+  return `<a class="back" href="#">← Overview</a>
+    <div class="dhead"><img src="https://images.evetech.net/characters/${x.id}/portrait?size=128" alt="">
+      <div style="min-width:0"><h2 class="ell">${esc(x.name)}</h2>
+        <div class="muted" style="font-size:12px">${esc(x.corp || "")}${x.totalSP ? " · " + fmtSP(x.totalSP) + " SP" : ""}</div></div></div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      <span class="chip sm c-mute">${x.account ? esc(x.account) : "No account set"}</span>
+      ${o ? `<span class="chip sm ${o.cls}">${o.text}</span>` : ""}
+      ${x.freeSP ? `<span class="chip sm c-ok">${fmtSP(x.freeSP)} free SP</span>` : ""}
+    </div>
+    <h3>Skill queue</h3>${queue}
+    <h3>Status</h3>
+    <div class="kv"><span>Wallet</span><span>${fmtISK(x.wallet)} ISK</span></div>
+    <div class="kv"><span>System</span><span>${esc(x.system || "—")}</span></div>
+    <div class="kv"><span>Docked at</span><span class="ell">${esc(x.docked || (x.system ? "In space" : "—"))}</span></div>
+    <div class="kv"><span>Ship</span><span class="ell">${esc(x.ship || "—")}${x.shipName ? " · " + esc(x.shipName) : ""}</span></div>
+    <div class="kv"><span>Corporation</span><span>${esc(x.corp || "—")}</span></div>
+    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+      <a href="#accounts" style="font-size:13px;align-self:center">Edit account</a>
+      <button class="link danger" onclick="removeChar('${x.id}')">Remove from this device</button>
+    </div>`;
+}
+
+function accountsView(ids){
+  const labels = [...new Set(ids.map(accountOf).filter(Boolean))].sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
+  const byLabel = (a,b) => !a && !b ? 0 : !a ? 1 : !b ? -1 : a.localeCompare(b, undefined, {numeric:true});
+  const sorted = ids.slice().sort((a,b) => byLabel(accountOf(a), accountOf(b)) || chars[a].name.localeCompare(chars[b].name));
+  return `<div class="card settings">
+    <a href="#">← Overview</a>
+    <h2 style="margin-top:12px">Accounts</h2>
+    <p class="muted" style="font-size:13px;margin:0 0 8px">EVE doesn't share account details with apps, so enter them here. Saved on this device only.</p>
+    <h3>Which account is each character on?</h3>
+    <datalist id="acctList">${labels.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
+    ${sorted.map(id => `<div class="srow"><label for="a_${id}">${esc(chars[id].name)}</label>
+      <input id="a_${id}" list="acctList" placeholder="Account name" value="${esc(accountOf(id))}" onchange="setAccount('${id}', this.value)"></div>`).join("")}
+    <h3>Omega expiry date per account</h3>
+    ${labels.length ? labels.map((l,i) => `<div class="srow"><label for="o_${i}">${esc(l)}</label>
+      <input id="o_${i}" type="date" value="${esc(meta.omega[l] || "")}" onchange="setOmega(${i}, this.value)"></div>`).join("")
+      : `<p class="muted" style="font-size:13px">Name your accounts above first.</p>`}
+  </div>`;
+}
+function saveMeta(){ store.set("eve.meta", meta); }
+function setAccount(id, v){ v = v.trim(); if(v) meta.accountOf[id] = v; else delete meta.accountOf[id]; saveMeta(); render(); }
+function setOmega(i, v){
+  const ids = Object.keys(chars), labels = [...new Set(ids.map(accountOf).filter(Boolean))].sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
+  const l = labels[i]; if(!l) return;
+  if(v) meta.omega[l] = v; else delete meta.omega[l];
+  saveMeta(); render();
+}
+
+function tick(){
+  const now = Date.now();
+  document.querySelectorAll("[data-cd]").forEach(el => el.textContent = fmtDur(+el.dataset.cd - now));
+  document.querySelectorAll("[data-start]").forEach(el => {
+    const s=+el.dataset.start, e=+el.dataset.end;
+    el.style.width = Math.max(0, Math.min(100, (now-s)/(e-s)*100)).toFixed(1) + "%";
+  });
+  if(isPaused()){
+    document.getElementById("synced").textContent = `Paused: ${pauseReason}. Resuming ${new Date(pausedUntil).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}`;
+  }else if(lastSync){
+    const m = Math.floor((now-lastSync)/6e4);
+    document.getElementById("synced").textContent = syncing ? "Syncing…" : m < 1 ? "Synced just now" : `Synced ${m}m ago`;
+  }else if(syncing) document.getElementById("synced").textContent = "Syncing…";
+}
+
+function removeChar(id){
+  if(!confirm(`Remove ${chars[id].name} from this device?`)) return;
+  delete chars[id]; delete data[id]; delete meta.accountOf[id];
+  store.set("eve.chars", chars); saveMeta();
+  location.hash = "";
+  render();
+}
+
+/* ---------- Boot ---------- */
+document.getElementById("addBtn").onclick = startLogin;
+document.getElementById("refreshBtn").onclick = refreshAll;
+document.getElementById("settingsBtn").onclick = () => { location.hash = "#accounts"; };
+window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden) return;
+  if(Date.now() - lastSync > 2 * 60e3) refreshAll();   // EVE caches this data for up to 2 minutes anyway
+  else schedulePoll();                                   // resume the 5-minute cycle
+});
+(async () => {
+  try{ await handleCallback(); }
+  catch(e){ document.getElementById("globalErr").textContent = e.message; }
+  render();
+  setInterval(tick, 1000);
+  if(!document.hidden) await refreshAll();   // opened in a background tab: wait until it's looked at (visibilitychange)
+})();
+</script>
+</body>
+</html>
