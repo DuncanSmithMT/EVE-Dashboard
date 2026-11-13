@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<title>EVE Dashboard</title>
+<style>
+  :root{
+    --bg:#0d1117; --card:#161b22; --card2:#1c232c; --border:#2a323d;
+    --text:#e6edf3; --muted:#8b98a5; --accent:#4fb3ff; --accent-dim:#16364f;
+    --ok:#3fb950; --ok-dim:#12301b; --warn:#e3b341; --warn-dim:#3a2e0f;
+    --bad:#f85149; --bad-dim:#3d1414;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  body{padding:max(16px,env(safe-area-inset-top)) 14px max(24px,env(safe-area-inset-bottom))}
+  .wrap{max-width:560px;margin:0 auto}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  h1{font-size:20px;font-weight:600;margin:0}
+  .sync{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px}
+  button{font:inherit;color:var(--text);background:var(--card2);border:1px solid var(--border);
+    border-radius:8px;padding:8px 12px;cursor:pointer}
+  button:active{transform:scale(.98)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  button.link{background:none;border:none;padding:4px;color:var(--muted);font-size:12px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px}
+  .row{display:flex;align-items:center;gap:12px}
+  .portrait{width:48px;height:48px;border-radius:50%;background:var(--card2);flex:none;object-fit:cover}
+  .name{font-weight:600;font-size:16px}
+  .sub{font-size:12px;color:var(--muted)}
+  .grow{flex:1;min-width:0}
+  .pill{font-size:11px;padding:3px 8px;border-radius:999px;white-space:nowrap}
+  .pill.ok{background:var(--ok-dim);color:var(--ok)}
+  .skill{margin-top:12px;font-size:14px}
+  .bar{height:6px;background:var(--card2);border-radius:3px;overflow:hidden;margin-top:6px}
+  .bar>div{height:100%;background:var(--accent);width:0;transition:width .5s linear}
+  .times{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:8px}
+  .times b{color:var(--text);font-weight:500;font-variant-numeric:tabular-nums}
+  .times b.warn{color:var(--warn)}
+  .alert{margin-top:12px;font-size:13px;padding:8px 10px;border-radius:8px}
+  .alert.bad{background:var(--bad-dim);color:var(--bad)}
+  .alert.warn{background:var(--warn-dim);color:var(--warn)}
+  details{margin-top:10px}
+  summary{font-size:12px;color:var(--muted);cursor:pointer;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ "} details[open] summary::before{content:"▾ "}
+  ol{margin:8px 0 0;padding:0;list-style:none}
+  ol li{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-top:1px solid var(--border)}
+  ol li span:last-child{color:var(--muted);font-variant-numeric:tabular-nums}
+  .empty{text-align:center;padding:32px 16px}
+  .empty p{color:var(--muted);font-size:14px;margin:8px 0 18px}
+  .err{font-size:12px;color:var(--bad);margin-top:8px}
+  .add{width:100%;margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Skill queues</h1>
+    <div class="sync"><span id="synced"></span><button class="link" id="refreshBtn" aria-label="Refresh">⟳</button></div>
+  </header>
+  <div id="list"></div>
+  <button class="add" id="addBtn">+ Add character</button>
+  <div class="err" id="globalErr"></div>
+</div>
+
+<script>
+/* ---------- Config ---------- */
+const CLIENT_ID = "28bb45097b894b8fa8885427fd253f28";
+// Scopes requested at login. Only ask for scopes ticked on the developer portal.
+const SCOPES = ["esi-skills.read_skills.v1", "esi-skills.read_skillqueue.v1"];
+const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, "");   // register this exact URL as the Callback URL
+const SSO = "https://login.eveonline.com/v2/oauth";
+const ESI = "https://esi.evetech.net";
+const COMPAT_DATE = "2020-01-01";
+const REFRESH_MS = 5 * 60 * 1000;
+
+/* ---------- Storage ---------- */
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} },
+  del(k){ try{ localStorage.removeItem(k); }catch{} }
+};
+let chars = store.get("eve.chars", {});           // id -> {id,name,access,refresh,expires}
+const skillNames = store.get("eve.skillNames", {}); // type_id -> name
+const data = {};                                   // id -> {queue, skills, error}
+
+/* ---------- PKCE helpers ---------- */
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const randStr = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
+async function sha256(s){ return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)); }
+function parseJwt(t){
+  const p = t.split(".")[1].replace(/-/g,"+").replace(/_/g,"/");
+  return JSON.parse(decodeURIComponent(escape(atob(p))));
+}
+
+async function startLogin(){
+  const verifier = randStr(32), state = randStr(16);
+  store.set("eve.pkce", {verifier, state});
+  const challenge = b64url(await sha256(verifier));
+  const q = new URLSearchParams({
+    response_type:"code", redirect_uri:REDIRECT_URI, client_id:CLIENT_ID,
+    scope:SCOPES.join(" "), code_challenge:challenge, code_challenge_method:"S256", state
+  });
+  location.href = `${SSO}/authorize?${q}`;
+}
+
+async function tokenRequest(params){
+  const r = await fetch(`${SSO}/token`, {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({...params, client_id:CLIENT_ID})
+  });
+  if(!r.ok) throw new Error(`Login service returned ${r.status}`);
+  return r.json();
+}
+
+function saveTokens(tok){
+  const claims = parseJwt(tok.access_token);
+  const id = claims.sub.split(":").pop();
+  chars[id] = { id, name:claims.name, access:tok.access_token, refresh:tok.refresh_token,
+                expires:Date.now() + (tok.expires_in - 60) * 1000 };
+  store.set("eve.chars", chars);
+  return id;
+}
+
+async function handleCallback(){
+  const p = new URLSearchParams(location.search);
+  if(p.has("error")){ store.del("eve.pkce"); history.replaceState(null, "", REDIRECT_URI); throw new Error("Login was cancelled or refused."); }
+  if(!p.has("code")) return;
+  const saved = store.get("eve.pkce", {});
+  history.replaceState(null, "", REDIRECT_URI);
+  if(p.get("state") !== saved.state) throw new Error("Login check failed (state mismatch). Try adding the character again.");
+  const tok = await tokenRequest({grant_type:"authorization_code", code:p.get("code"), code_verifier:saved.verifier});
+  store.del("eve.pkce");
+  saveTokens(tok);
+}
+
+const pendingRefresh = {};   // one refresh per character at a time (EVE rotates refresh tokens)
+function accessToken(c){
+  if(Date.now() < c.expires) return Promise.resolve(c.access);
+  return pendingRefresh[c.id] ||= (async () => {
+    const tok = await tokenRequest({grant_type:"refresh_token", refresh_token:c.refresh});
+    if(!chars[c.id]) return tok.access_token;   // removed while refreshing: don't re-add
+    saveTokens(tok);
+    return chars[c.id].access;
+  })().finally(() => delete pendingRefresh[c.id]);
+}
+
+/* ---------- ESI ---------- */
+async function esi(path, token, opts={}){
+  const headers = {"X-Compatibility-Date":COMPAT_DATE, "Accept":"application/json"};
+  if(token) headers.Authorization = `Bearer ${token}`;
+  if(opts.body) headers["Content-Type"] = "application/json";
+  const r = await fetch(ESI + path, {method:opts.method||"GET", headers, body:opts.body});
+  if(!r.ok) throw new Error(`ESI ${path.split("/")[3] || path} returned ${r.status}`);
+  return r.json();
+}
+
+async function resolveNames(ids){
+  const missing = [...new Set(ids)].filter(id => !skillNames[id]);
+  if(!missing.length) return;
+  for(let i=0;i<missing.length;i+=500){
+    const res = await esi("/universe/names", null, {method:"POST", body:JSON.stringify(missing.slice(i,i+500))});
+    res.forEach(n => skillNames[n.id] = n.name);
+  }
+  store.set("eve.skillNames", skillNames);
+}
+
+async function loadChar(c){
+  try{
+    const t = await accessToken(c);
+    const [queue, skills] = await Promise.all([
+      esi(`/characters/${c.id}/skillqueue`, t),
+      esi(`/characters/${c.id}/skills`, t)
+    ]);
+    queue.sort((a,b) => a.queue_position - b.queue_position);
+    await resolveNames(queue.map(q => q.skill_id));
+    if(chars[c.id]) data[c.id] = {queue, skills};
+  }catch(e){
+    data[c.id] = {...(data[c.id]||{}), error:e.message};
+  }
+}
+
+let lastSync = 0;
+async function refreshAll(){
+  document.getElementById("globalErr").textContent = "";
+  await Promise.all(Object.values(chars).map(loadChar));
+  lastSync = Date.now();
+  render();
+}
+
+/* ---------- Rendering ---------- */
+const ROMAN = ["","I","II","III","IV","V"];
+const fmtSP = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n);
+function fmtDur(ms){
+  if(ms <= 0) return "done";
+  const d=Math.floor(ms/864e5), h=Math.floor(ms%864e5/36e5), m=Math.floor(ms%36e5/6e4), s=Math.floor(ms%6e4/1e3);
+  return d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+}
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+
+let nextFinishTimer;
+function render(){
+  clearTimeout(nextFinishTimer);
+  const list = document.getElementById("list");
+  const ids = Object.keys(chars);
+  if(!ids.length){
+    list.innerHTML = `<div class="card empty"><div class="name">No characters yet</div>
+      <p>Sign in with EVE Online to see each character's skill queue.</p>
+      <button class="primary" onclick="startLogin()">Add your first character</button></div>`;
+    document.getElementById("addBtn").style.display = "none";
+    return;
+  }
+  document.getElementById("addBtn").style.display = "";
+  list.innerHTML = ids.map(id => {
+    const c = chars[id], d = data[id] || {};
+    const free = d.skills?.unallocated_sp || 0;
+    const head = `<div class="row">
+      <img class="portrait" src="https://images.evetech.net/characters/${id}/portrait?size=128" alt="">
+      <div class="grow"><div class="name">${esc(c.name)}</div>
+        <div class="sub">${d.skills ? fmtSP(d.skills.total_sp)+" SP" : "Loading…"}</div></div>
+      ${free ? `<span class="pill ok">${fmtSP(free)} free SP</span>` : ""}
+    </div>`;
+    let body = "";
+    if(d.error){
+      body = `<div class="alert bad">Couldn't load: ${esc(d.error)}.
+        <button class="link" onclick="startLogin()">Sign in again</button></div>`;
+    }else if(d.queue){
+      const now = Date.now();
+      const active = d.queue.filter(q => !q.finish_date || Date.parse(q.finish_date) > now);
+      if(!active.length){
+        body = `<div class="alert bad">Queue empty — not training</div>`;
+      }else if(!active[0].finish_date){
+        body = `<div class="alert bad">Queue paused — ${esc(skillNames[active[0].skill_id]||"skill")} ${ROMAN[active[0].finished_level]} is next</div>`;
+      }else{
+        const cur = active[0], last = active[active.length-1];
+        const queueEnd = Date.parse(last.finish_date);
+        body = `<div class="skill">${esc(skillNames[cur.skill_id]||"Skill "+cur.skill_id)} ${ROMAN[cur.finished_level]}</div>
+          <div class="bar"><div data-start="${Date.parse(cur.start_date) || now}" data-end="${Date.parse(cur.finish_date)}"></div></div>
+          <div class="times"><span>Skill: <b data-cd="${Date.parse(cur.finish_date)}"></b></span>
+            <span>Queue: <b data-cd="${queueEnd}" class="${queueEnd-now < 864e5 ? "warn":""}"></b></span></div>
+          ${queueEnd-now < 864e5 ? `<div class="alert warn">Queue ends in under 24 hours</div>` : ""}
+          <details><summary>${active.length} skill${active.length>1?"s":""} in queue</summary><ol>
+            ${active.map(q => `<li><span>${esc(skillNames[q.skill_id]||q.skill_id)} ${ROMAN[q.finished_level]}</span>
+              <span data-cd="${Date.parse(q.finish_date)}"></span></li>`).join("")}
+          </ol></details>`;
+      }
+    }
+    return `<div class="card">${head}${body}
+      <div style="text-align:right"><button class="link" onclick="removeChar('${id}')">Remove</button></div></div>`;
+  }).join("");
+  // when the next skill completes, re-sync so the finished skill drops off
+  const nextFinish = Math.min(...Object.values(data).flatMap(d => (d.queue||[])
+    .map(q => Date.parse(q.finish_date)).filter(t => t > Date.now())));
+  if(isFinite(nextFinish)) nextFinishTimer = setTimeout(refreshAll, Math.min(nextFinish - Date.now() + 5000, 2**31 - 1));
+  tick();
+}
+
+function tick(){
+  const now = Date.now();
+  document.querySelectorAll("[data-cd]").forEach(el => el.textContent = fmtDur(+el.dataset.cd - now));
+  document.querySelectorAll("[data-start]").forEach(el => {
+    const s=+el.dataset.start, e=+el.dataset.end;
+    el.style.width = Math.max(0, Math.min(100, (now-s)/(e-s)*100)).toFixed(1) + "%";
+  });
+  if(lastSync){
+    const m = Math.floor((now-lastSync)/6e4);
+    document.getElementById("synced").textContent = m < 1 ? "synced just now" : `synced ${m}m ago`;
+  }
+}
+
+function removeChar(id){
+  if(!confirm(`Remove ${chars[id].name} from this dashboard?`)) return;
+  delete chars[id]; delete data[id];
+  store.set("eve.chars", chars);
+  render();
+}
+
+/* ---------- Boot ---------- */
+document.getElementById("addBtn").onclick = startLogin;
+document.getElementById("refreshBtn").onclick = refreshAll;
+document.addEventListener("visibilitychange", () => {
+  if(!document.hidden && Date.now() - lastSync > 60e3) refreshAll();
+});
+(async () => {
+  try{ await handleCallback(); }
+  catch(e){ document.getElementById("globalErr").textContent = e.message; }
+  render();
+  await refreshAll();
+  setInterval(tick, 1000);
+  setInterval(refreshAll, REFRESH_MS);
+})();
+</script>
+</body>
+</html>
