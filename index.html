@@ -898,7 +898,8 @@ function detailHtml(x){
         <div class="kv"><span>Location</span><span class="ell">${esc(j.facility)}</span></div>
         <div class="kv"><span>System</span><span>${esc(j.system || "—")}</span></div>
         <div class="kv"><span>Started · ends</span><span>${fmtWhen(j.start)} · ${fmtWhen(j.end)}</span></div>
-        <div class="kv"><span>Runs</span><span>${j.runs ?? "—"}${j.licensed && j.licensed !== j.runs ? ` (blueprint: ${j.licensed} licensed)` : ""}</span></div>
+        <div class="kv"><span>Runs</span><span>${j.runs ?? "—"}</span></div>
+        ${j.activityId === 5 && j.licensed ? `<div class="kv"><span>Runs per copy</span><span>${j.licensed}</span></div>` : ""}
         ${j.probability != null && j.activityId === 8 ? `<div class="kv"><span>Success chance</span><span>${Math.round(j.probability * 100)}%</span></div>` : ""}
         <div class="kv"><span>Install cost</span><span>${j.cost != null ? fmtISK(j.cost) + " ISK" : "—"}</span></div>
         ${indices}
