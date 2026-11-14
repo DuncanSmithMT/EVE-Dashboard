@@ -159,7 +159,7 @@ const SSO = "https://login.eveonline.com/v2/oauth";
 const ESI = "https://esi.evetech.net";
 const COMPAT_DATE = "2020-01-01";
 // ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
-const APP_ID = "EVE-Dashboard/1.2 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const APP_ID = "EVE-Dashboard/1.3 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
 const REFRESH_MS = 5 * 60 * 1000;
 
 /* ---------- Storage ---------- */
@@ -260,6 +260,7 @@ async function esi(path, token, opts={}){
   else if(r.status === 429) pause(+r.headers.get("retry-after"), "EVE's rate limit was reached");
   else if(r.status >= 502 && r.status <= 504) pause(60, "EVE's servers are having problems");
   if(!r.ok) throw Object.assign(new Error(`EVE returned ${r.status} for ${path.split("/").filter(Boolean).slice(-1)[0]}`), {status:r.status});
+  if(opts.pg) opts.pg.pages = +r.headers.get("x-pages") || 1;
   return r.json();
 }
 
@@ -307,7 +308,7 @@ async function loadChar(c){
       esi(`/characters/${c.id}/skills`, t)
     ]);
     // extras: a failure here shouldn't hide the skill queue
-    const [wallet, location, ship, pub, jobs, clones, fatigue, implants] = (await Promise.allSettled([
+    const [wallet, location, ship, pub, jobs, clones, fatigue, implants, roles] = (await Promise.allSettled([
       extra(c, "wallet",   () => esi(`/characters/${c.id}/wallet`, t)),
       extra(c, "location", () => esi(`/characters/${c.id}/location`, t)),
       extra(c, "ship",     () => esi(`/characters/${c.id}/ship`, t)),
@@ -315,7 +316,8 @@ async function loadChar(c){
       extra(c, "jobs",     () => esi(`/characters/${c.id}/industry/jobs`, t)),   // EVE cache 5 min
       extra(c, "clones",   () => esi(`/characters/${c.id}/clones`, t)),
       extra(c, "fatigue",  () => esi(`/characters/${c.id}/fatigue`, t)),         // EVE cache 5 min
-      extra(c, "implants", () => esi(`/characters/${c.id}/implants`, t))
+      extra(c, "implants", () => esi(`/characters/${c.id}/implants`, t)),
+      extra(c, "roles",    () => esi(`/characters/${c.id}/roles`, t))            // EVE cache 1h: who may read corp industry jobs
     ])).map(r => r.status === "fulfilled" ? r.value : null);
     queue.sort((a,b) => a.queue_position - b.queue_position);
     if(location?.structure_id) await resolveStructure(location.structure_id, t);
@@ -326,11 +328,48 @@ async function loadChar(c){
     if(chars[c.id]) data[c.id] = {queue, skills,   // (also clears any old error)
       wallet: wallet ?? prev.wallet, location: location ?? prev.location, ship: ship ?? prev.ship,
       corpId: pub?.corporation_id ?? prev.corpId, jobs: jobs ?? prev.jobs, clones: clones ?? prev.clones,
-      fatigue: fatigue ?? prev.fatigue, implants: implants ?? prev.implants};
+      fatigue: fatigue ?? prev.fatigue, implants: implants ?? prev.implants, roles: roles ?? prev.roles};
   }catch(e){
     if(e.status === "paused") return;          // not this character's fault; keep last good data
     const auth = [400,401,403].includes(e.status);
     if(chars[c.id]) data[c.id] = {...(data[c.id]||{}), error:e.message, authError:auth};
+  }
+}
+
+// Jobs run with corporation blueprints/hangars are owned by the corporation, not the character, and only appear in
+// the corporation's job list. EVE lets a character with the Factory Manager role (or a director) read that list.
+// One call per corporation per refresh; only jobs installed by characters on this dashboard are kept.
+const corpJobs = {};   // corporation id -> jobs installed by this dashboard's characters
+async function loadCorpJobs(){
+  const byCorp = {};
+  for(const id of Object.keys(chars)){
+    const d = data[id];
+    if(!d?.corpId || d.authError) continue;
+    const roles = d.roles?.roles || [];
+    if(roles.includes("Factory_Manager") || roles.includes("Director")) (byCorp[d.corpId] ||= []).push(chars[id]);
+  }
+  for(const k of Object.keys(corpJobs)) if(!byCorp[k]) delete corpJobs[k];   // nobody can read that corporation any more
+  for(const [corpId, readers] of Object.entries(byCorp)){
+    let allRefused = true;
+    for(const c of readers){
+      if(isPaused()) return;
+      if(refused[c.id + ":corpjobs"]) continue;
+      try{
+        const t = await accessToken(c), pg = {}, path = `/corporations/${corpId}/industry/jobs`;
+        let jobs = await esi(path, t, {pg});
+        for(let p = 2; p <= pg.pages; p++) jobs = jobs.concat(await esi(`${path}?page=${p}`, t));
+        const ids = new Set();                   // a job can repeat across pages if the list shifts between requests
+        const mine = jobs.filter(j => chars[j.installer_id] && !ids.has(j.job_id) && ids.add(j.job_id));
+        await resolveNames(mine.map(j => j.product_type_id || j.blueprint_type_id));
+        corpJobs[corpId] = mine;
+        allRefused = false;
+        break;                                   // one reader per corporation is enough
+      }catch(e){
+        if(e.status === 403) refused[c.id + ":corpjobs"] = true;   // try the corporation's next reader
+        else { allRefused = false; break; }      // paused / EVE trouble: keep the last good list
+      }
+    }
+    if(allRefused) delete corpJobs[corpId];
   }
 }
 
@@ -346,7 +385,10 @@ async function refreshAll(){
   syncing = true;
   const live = () => { if(route().view !== "accounts") render(); };   // re-rendering the Accounts page would wipe what's being typed
   let ran = 0;
-  try{ await pool(Object.values(chars), 4, async c => { if(!isPaused()) { ran++; await loadChar(c); live(); } }); }
+  try{
+    await pool(Object.values(chars), 4, async c => { if(!isPaused()) { ran++; await loadChar(c); live(); } });
+    await loadCorpJobs();
+  }
   finally{
     syncing = false;
     if(ran) lastSync = Date.now();   // a refresh skipped entirely by a pause doesn't count as fresh data
@@ -403,10 +445,12 @@ function info(id){
   if([r.ship, `${r.ship} - ${r.name}`, `${r.name}'s ${r.ship}`].includes(r.shipName)) r.shipName = "";
 
   // industry: ready = EVE says ready, or an active job whose end time has passed
-  r.jobs = (d.jobs || []).map(j => {
+  const own = d.jobs || [], seen = new Set(own.map(j => j.job_id));
+  const viaCorp = Object.values(corpJobs).flat().filter(j => j.installer_id === +id && !seen.has(j.job_id)).map(j => ({...j, corp:true}));
+  r.jobs = [...own, ...viaCorp].map(j => {
     const end = Date.parse(j.end_date);
     const state = j.status === "ready" || (j.status === "active" && end <= now) ? "ready" : j.status === "active" ? "active" : j.status;
-    return {state, end, runs:j.runs, activity:ACTIVITY[j.activity_id] || "Industry", item:names[j.product_type_id || j.blueprint_type_id] || "Item"};
+    return {state, end, runs:j.runs, corp:!!j.corp, activity:ACTIVITY[j.activity_id] || "Industry", item:names[j.product_type_id || j.blueprint_type_id] || "Item"};
   }).filter(j => ["ready","active","paused"].includes(j.state));
   r.jobsReady = r.jobs.filter(j => j.state === "ready").length;
   r.jobsActive = r.jobs.filter(j => j.state === "active").length;
@@ -598,7 +642,7 @@ function detailHtml(x){
       ${x.active.slice(1).map(q => `<div class="kv"><span class="ell">${esc(skillLabel(q))}</span><span data-cd="${Date.parse(q.finish_date)}"></span></div>`).join("")}`;
   const jobs = !x.hasJobs ? `<p class="muted" style="font-size:13px">—</p>` : !x.jobs.length ? `<p class="muted" style="font-size:13px">No active jobs</p>` :
     x.jobs.slice().sort((a,b) => (a.state==="ready" ? 0 : 1) - (b.state==="ready" ? 0 : 1) || a.end - b.end).map(j =>
-      `<div class="kv"><span class="ell">${esc(j.activity)} · ${esc(j.item)}${j.runs > 1 ? " ×" + j.runs : ""}</span>
+      `<div class="kv"><span class="ell">${esc(j.activity)} · ${esc(j.item)}${j.runs > 1 ? " ×" + j.runs : ""}${j.corp ? ` <span class="muted">· corp</span>` : ""}</span>
         <span>${j.state === "ready" ? `<span class="chip sm c-info">Ready</span>` : j.state === "paused" ? `<span class="muted">Paused</span>` : cd(j.end)}</span></div>`).join("");
   const jc = x.jcHours == null ? "—" : x.jcReadyAt > now ? cd(x.jcReadyAt) : `<span style="color:var(--ok)">Ready</span>`;
   return `<a class="back" href="#">← Overview</a>
