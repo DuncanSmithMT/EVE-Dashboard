@@ -4,21 +4,21 @@ A personal, phone-friendly dashboard for EVE Online characters. One place to see
 
 **Live site:** https://duncansmithmt.github.io/EVE-Dashboard/
 
-## What it shows (Phases 1–2)
+## What it shows (Phases 1–2, iteration 3)
 
 ### Overview
-- **Needs attention** strip: characters that must sign in again, stopped (paused/empty) skill queues, queues ending in under 24 hours, accounts whose Omega ends within 7 days, industry jobs ready to deliver, characters with free SP.
-- **Totals:** total ISK across all characters, how many are training, industry jobs (active · ready), total free SP.
-- **One row per character:** portrait, name, what's training, live countdown to queue end, industry (jobs ready, or active count + next finish), wallet, system · ship, jump clone (Ready or countdown), jump timers (red or blue). On a phone the row shrinks to name, status dot, queue time and wallet, with small badges for free SP, jobs ready and red/blue timers.
+- **Needs attention** strip: characters that must sign in again, **accounts** with no character training, **accounts** whose skill queue has less than 33 days left (setting `QUEUE_WARN_DAYS` in `index.html`), accounts whose Omega ends within 7 days, and industry jobs ready to deliver. Skill queues are judged **per account**: one character training at a time is normal, so a character that isn't training only counts when its whole account has stopped. Characters without an account count as their own account.
+- **Tiles:** total ISK; **shortest skill queue** (the account whose queue runs out first, and how many accounts aren't training); **industry slots in use** for all characters, as manufacturing / research / reactions "in use/capacity".
+- **One row per character:** portrait, name, **label**, what's training, live countdown to queue end, industry (jobs ready, or active count + next finish), wallet, system · ship, jump clone (Ready or countdown, plus the name of the clone the character is in), jump timers (red or blue). Characters not training while another character on their account is show a grey dot instead of red. On a phone the row shrinks to name, status dot, queue time and wallet, with small badges for free SP, jobs ready and red/blue timers.
 - **View menu** (the sorted views): grouped by account (default; in your display order, with each account's Omega countdown), queue ends soonest, industry (ready first, then finishing soonest), jump fatigue (most first), wallet highest first, name A–Z. The choice is remembered.
 
 ### Character detail
-Click/tap a character. On desktop it opens as a side panel; on a phone it's a full screen with a back link.
+Click/tap a character. On desktop it opens as a side panel; on a phone it's a full screen with a back link. Each section (skill queue, industry, jump timers, jump clones, status) can be collapsed by clicking its heading; collapsed sections stay collapsed on that device.
 - Account label, Omega countdown, free SP
 - Current skill with progress bar, time left on the skill and the whole queue, and every queued skill with its finish countdown
-- **Industry jobs:** activity, product/blueprint, runs, and a countdown, or Ready / Paused (ready jobs listed first). Includes **corporation-owned jobs** the character installed (marked "· corp"); see the note below
+- **Industry jobs:** the heading shows slots "in use/capacity" for manufacturing (M), research (R) and reactions (Re). Jobs are grouped by those three types, with the activity colored like the game (manufacturing yellow, research blue, reactions teal). Capacity is 1 + the levels of the two slot skills per type (Mass Production / Advanced Mass Production; Laboratory Operation / Advanced Laboratory Operation; Mass Reactions / Advanced Mass Reactions). Each job shows product/blueprint, runs, and a countdown, or Ready / Paused. Includes **corporation-owned jobs** the character installed (marked "· corp"); see the note below
 - **Jump timers:** jump clone cooldown (24h minus 1h per Infomorph Synchronizing level, from the last clone jump); **blue** = jump fatigue (from EVE); **red** = jump activation, shown as "clear in ≤" (see note below)
-- **Clones and implants:** number of jump clones, installed implants
+- **Jump clones:** the current clone and every jump clone, with its location and implants by slot. **Naming:** EVE doesn't share clone names or say which clone a character is in, so you name clones here (box at the top of each clone). Names are matched by **implant set**: the current clone is recognized by the implants plugged in right now, and that name shows on the overview. Clones with no implants can't be named; two clones with identical implants share a name.
 - Wallet, system, docked station/structure (or "In space"), ship type and name (EVE's default ship names are hidden), corporation
 
 **About corporation-owned industry jobs:** jobs run from corporation blueprints/hangars belong to the corporation, so EVE leaves them out of the character's own job list even though they use the character's job slots. The dashboard reads each corporation's job list once per refresh and matches jobs to your characters by who installed them. EVE only allows that for a character with the **Factory Manager** role (or a director), so **at least one character on the dashboard in each corporation needs that role**; otherwise that corporation's corp-owned jobs can't be shown. Other members' jobs are ignored. If a role is granted later, reload the page.
@@ -30,7 +30,8 @@ Click/tap a character. On desktop it opens as a side panel; on a phone it's a fu
 The **Accounts** button opens a page to:
 - type each character's account name (suggestions from names already used),
 - set each account's **display order** number and **Omega expiry date**, and
-- set each character's **order within its account** (e.g. its launcher slot).
+- set each character's **order within its account** (e.g. its launcher slot), and
+- give each character a **label** (e.g. "Main alliance", "Neutral alt"), with a color per label. The label shows as a colored chip between the name and the skill.
 Order numbers are optional: lower numbers show first; anything unnumbered goes after, alphabetically. Characters without an account go under **Unassigned** at the bottom of the overview. Note: order and Omega date are tied to the account *name*, so renaming an account means re-entering them.
 
 ### Refreshing
@@ -55,6 +56,7 @@ Audited 2026-11-13 against EVE's published per-route limits (the `x-rate-limit` 
 | Industry jobs | `char-industry` | 600 tokens / 15 min | 300 s | 1 call every 5 min ≈ 6 tokens / 15 min (1%) |
 | Corporation industry jobs | `corp-industry` | 600 tokens / 15 min | 300 s | 1 call per corporation every 5 min (more only if the list has several pages) |
 | Corporation roles | — | — | 1 h | 1 call per character per refresh; repeats within the hour are answered by the browser's cache |
+| Implant types (slot numbers) | none | — | — | Once per implant type, ever; stored on the device |
 | Public character info (corporation) | none (error limit only) | — | 24 h | Repeats are served from the browser's cache; ~1 real call per character per day |
 | Names (skills, ships, systems…) | none | — | — | Only IDs not seen before; stored on the device |
 
@@ -195,6 +197,9 @@ Three layout options were mocked up for desktop and phone on 2026-11-13 (Claude 
 - **B. Overview + detail:** "needs attention" strip, totals, one compact row per character grouped by account; tap/click a character for full details. (Recommended.)
 - **C. Topic tabs:** Skills / Industry / Market / Timers / Wallet / Clones / Mail, each listing all characters.
 
+### Long-term features
+Kept in the project doc **long-term-features.md** (ideas and problems to tackle as time allows).
+
 ### Build phases
 1. ✅ **Phase 1:** layout B + sorted views, account labels and Omega dates, wallet, location/ship, corporation.
 2. ✅ **Phase 2:** industry jobs, jump clone cooldown, red/blue jump timers, implants; "industry ready" and "fatigue" sorts. Also (requested 2026-11-13):
@@ -206,4 +211,4 @@ Three layout options were mocked up for desktop and phone on 2026-11-13 (Claude 
 
 ## Changelog
 
-- **2026-11-13:** First release: skill queue module. Reliability fixes from code review (iOS-safe login storage, single token refresh at a time, auto re-sync when a skill finishes). Expanded to all 75 scopes. Documented the login workaround. Captured the full capability list, manual account/Omega entry decision, and three layout mockups. Chose layout B + C's sorted views. **Phase 1 built:** overview/detail layout, sorted views, Accounts page (labels + Omega dates), wallet, location/ship, corporation; staggered loading; transient errors no longer ask to sign in again. **ESI usage audit:** verified EVE's per-route limits and cache behaviour; no polling while hidden; refresh 5 min after the last one finishes; skill completion redraws locally; pause on 420/429/502–504 or near the error limit; don't repeat refused calls or failed logins; X-User-Agent header. **Phase 2 built:** industry jobs, jump clone cooldown, blue (fatigue) / red (activation, upper bound) timers, implants, industry and fatigue views, account and character display order, default ship names hidden, failed optional data keeps its last value; **corporation-owned industry jobs** (read via a Factory Manager/director character, matched by installer); the overview's corporation column moved to the detail view to make room (as in mockup B).
+- **2026-11-13:** First release: skill queue module. Reliability fixes from code review (iOS-safe login storage, single token refresh at a time, auto re-sync when a skill finishes). Expanded to all 75 scopes. Documented the login workaround. Captured the full capability list, manual account/Omega entry decision, and three layout mockups. Chose layout B + C's sorted views. **Phase 1 built:** overview/detail layout, sorted views, Accounts page (labels + Omega dates), wallet, location/ship, corporation; staggered loading; transient errors no longer ask to sign in again. **ESI usage audit:** verified EVE's per-route limits and cache behaviour; no polling while hidden; refresh 5 min after the last one finishes; skill completion redraws locally; pause on 420/429/502–504 or near the error limit; don't repeat refused calls or failed logins; X-User-Agent header. **Phase 2 built:** industry jobs, jump clone cooldown, blue (fatigue) / red (activation, upper bound) timers, implants, industry and fatigue views, account and character display order, default ship names hidden, failed optional data keeps its last value; **corporation-owned industry jobs** (read via a Factory Manager/director character, matched by installer); the overview's corporation column moved to the detail view to make room (as in mockup B). **Iteration 3:** collapsible detail sections; industry jobs grouped by manufacturing/research/reactions with game colors and slots in use/capacity (per character and totals); skill queue alerts per account (only when no character on the account trains) and queue-under-33-days alerts; shortest-account-queue tile; jump clone list with implants by slot and user-named clones (matched by implant set), current clone name on the overview; character labels with colors; new attention strip (free SP removed). Then: reactions colored teal (as in game); idle slots removed from the attention strip; structure timers removed and moved to the long-term features list.

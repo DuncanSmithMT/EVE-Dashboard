@@ -42,13 +42,25 @@
   .attention b{font-size:13px;font-weight:600;margin-right:2px}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
   .tile{padding:10px 14px}
-  .tile span{display:block;font-size:12px;color:var(--muted)} .tile strong{font-size:19px;font-weight:600}
+  .tile span{display:block;font-size:12px;color:var(--muted)} .tile strong{font-size:19px;font-weight:600;display:block}
+  .tile strong.small{font-size:15px;margin:2px 0}
+  .slots{display:flex;flex-wrap:wrap;gap:10px;font-weight:600} .tile .slots{font-size:15px;margin-top:4px} .slot{white-space:nowrap}
+  .chip.lbl{background:transparent;border:1px solid;justify-self:start;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  details.sec{border-top:1px solid var(--line);margin-top:10px}
+  details.sec>summary{display:flex;align-items:center;gap:10px;cursor:pointer;list-style:none;padding:10px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+  details.sec>summary::-webkit-details-marker{display:none}
+  details.sec>summary::before{content:"▸";font-size:11px} details.sec[open]>summary::before{content:"▾"}
+  details.sec>summary .slots{font-size:12px;margin-left:auto}
+  .subhead{font-size:12px;font-weight:600;margin:10px 0 2px}
+  .clone{border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin:8px 0}
+  .clonehead{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;padding:2px 0 4px}
+  .clonename{flex:1 1 150px;min-height:32px;padding:4px 8px;font-size:13px}
   .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;flex-wrap:wrap}
   .main{display:flex;gap:16px;align-items:flex-start}
   #overview{flex:1;min-width:0;overflow-x:auto}
   #detail{flex:0 0 400px;padding:16px;display:none}
   body.has-detail #detail{display:block}
-  .row,.thead{display:grid;grid-template-columns:36px minmax(140px,1.2fr) minmax(150px,1.3fr) 105px 120px 80px minmax(130px,1fr) 95px 115px;
+  .row,.thead{display:grid;grid-template-columns:36px minmax(130px,1.1fr) 110px minmax(140px,1.2fr) 105px 120px 80px minmax(120px,1fr) minmax(95px,.8fr) 115px;
     gap:10px;align-items:center;padding:8px 12px}
   .thead{font-size:12px;color:var(--muted);padding-top:10px;padding-bottom:10px}
   .row{border-top:1px solid var(--line);color:var(--text);text-decoration:none;font-size:13px;min-height:52px}
@@ -159,7 +171,7 @@ const SSO = "https://login.eveonline.com/v2/oauth";
 const ESI = "https://esi.evetech.net";
 const COMPAT_DATE = "2020-01-01";
 // ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
-const APP_ID = "EVE-Dashboard/1.3 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const APP_ID = "EVE-Dashboard/1.5 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
 const REFRESH_MS = 5 * 60 * 1000;
 
 /* ---------- Storage ---------- */
@@ -321,9 +333,14 @@ async function loadChar(c){
     ])).map(r => r.status === "fulfilled" ? r.value : null);
     queue.sort((a,b) => a.queue_position - b.queue_position);
     if(location?.structure_id) await resolveStructure(location.structure_id, t);
+    const jcs = clones?.jump_clones || [];
+    for(const j of jcs) if(j.location_type === "structure") await resolveStructure(j.location_id, t);
+    const allImplants = [...(implants||[]), ...jcs.flatMap(j => j.implants || [])];
     await resolveNames([...queue.map(q => q.skill_id), ship?.ship_type_id, location?.solar_system_id,
                         location?.station_id, pub?.corporation_id,
-                        ...(jobs||[]).map(j => j.product_type_id || j.blueprint_type_id), ...(implants||[])]);
+                        ...(jobs||[]).map(j => j.product_type_id || j.blueprint_type_id), ...allImplants,
+                        ...jcs.filter(j => j.location_type === "station").map(j => j.location_id)]);
+    await resolveSlots(allImplants);
     const prev = data[c.id] || {};             // a failed extra keeps showing its last good value
     if(chars[c.id]) data[c.id] = {queue, skills,   // (also clears any old error)
       wallet: wallet ?? prev.wallet, location: location ?? prev.location, ship: ship ?? prev.ship,
@@ -373,6 +390,22 @@ async function loadCorpJobs(){
   }
 }
 
+// Implant slot numbers (1-10) come from each implant type's "implantness" attribute (dogma attribute 331).
+// Public data that never changes: looked up once per implant type and stored on the device.
+const slots = store.get("eve.slots", {}), slotReq = {};
+async function resolveSlots(ids){
+  for(const id of [...new Set(ids)].filter(id => !(id in slots))){
+    if(isPaused()) return;
+    try{
+      await (slotReq[id] ||= esi(`/universe/types/${id}`, null)       // shared, so parallel characters don't repeat it
+        .then(t => { slots[id] = (t.dogma_attributes || []).find(a => a.attribute_id === 331)?.value || 0; })
+        .catch(e => { if(e.status === 404) slots[id] = 0; throw e; })
+        .finally(() => delete slotReq[id]));
+    }catch(e){ if(e.status !== 404) break; }
+  }
+  store.set("eve.slots", slots);
+}
+
 // a few characters at a time, so 28+ characters don't flood EVE with requests
 async function pool(items, n, fn){
   const q = [...items];
@@ -383,7 +416,7 @@ let lastSync = 0, syncing = false;
 async function refreshAll(){
   if(syncing) return;
   syncing = true;
-  const live = () => { if(route().view !== "accounts") render(); };   // re-rendering the Accounts page would wipe what's being typed
+  const live = () => { if(route().view !== "accounts") safeRender(); };   // re-rendering the Accounts page would wipe what's being typed
   let ran = 0;
   try{
     await pool(Object.values(chars), 4, async c => { if(!isPaused()) { ran++; await loadChar(c); live(); } });
@@ -419,7 +452,10 @@ function fmtDur(ms){
 const esc = s => String(s ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const skillLabel = q => `${names[q.skill_id] || "Skill " + q.skill_id} ${ROMAN[q.finished_level] || ""}`;
 const accountOf = id => meta.accountOf[id] || "";
-meta.accountOrder ||= {}; meta.charOrder ||= {};
+meta.accountOrder ||= {}; meta.charOrder ||= {}; meta.charLabel ||= {}; meta.labelColor ||= {}; meta.cloneNames ||= {};
+
+// Settings you may want to tweak
+const QUEUE_WARN_DAYS = 33;   // "Needs attention" when an account's skill queue has less than this left
 
 // Display order you set on the Accounts page: numbered first (ascending), then unnumbered A–Z; "Unassigned" last.
 const num = v => (v === undefined || v === null || v === "" || isNaN(v)) ? Infinity : +v;
@@ -431,40 +467,68 @@ function compareChars(a, b){   // a, b: character ids
   return num(meta.charOrder[a]) - num(meta.charOrder[b]) || chars[a].name.localeCompare(chars[b].name);
 }
 
-const INFOMORPH_SYNC = 33399;   // skill: -1 hour per level on the 24h jump clone cooldown
+// Character labels: free text, each label has one color chosen on the Accounts page
+const LABEL_COLORS = {blue:"#4fb3ff", green:"#3fb950", amber:"#e3b341", red:"#f85149", purple:"#a78bfa", gray:"#9aa6b2"};
+const labelOf = id => meta.charLabel[id] || "";
+const labelColor = l => LABEL_COLORS[meta.labelColor[l]] || LABEL_COLORS.gray;
+const labelChip = l => l ? `<span class="chip sm lbl" style="color:${labelColor(l)};border-color:${labelColor(l)}">${esc(l)}</span>` : "";
+
+// Industry: three job types, colored like the game (manufacturing yellow, research blue, reactions teal)
+const CATS = [{k:"M", name:"Manufacturing", color:"#e3b341"}, {k:"R", name:"Research", color:"#4fb3ff"}, {k:"Re", name:"Reactions", color:"#2ec4b6"}];
+const CAT_OF = {1:"M", 3:"R", 4:"R", 5:"R", 7:"R", 8:"R", 9:"Re", 11:"Re"};
+const CAT_COLOR = Object.fromEntries(CATS.map(c => [c.k, c.color]));
+// Job slots: 1 base + 1 per level of each of the two skills for that type
+const SLOT_SKILLS = {M:[3387, 24625], R:[3406, 24624], Re:[45748, 45749]};
 const ACTIVITY = {1:"Manufacturing", 3:"TE research", 4:"ME research", 5:"Copying", 7:"Reverse engineering", 8:"Invention", 9:"Reaction", 11:"Reaction"};
+const INFOMORPH_SYNC = 33399;   // skill: -1 hour per level on the 24h jump clone cooldown
+const slotsHtml = (use, cap) => CATS.map(c => `<span class="slot" style="color:${c.color}" title="${c.name}">${c.k} ${use[c.k]}/${cap[c.k]}</span>`).join("");
+
+// Jump clones: EVE doesn't share clone names or say which clone a character is in, so names are set on the dashboard
+// and matched by implant set. The current clone is the one whose name matches the implants plugged in right now.
+const cloneSig = implants => (implants || []).slice().sort((a,b) => a-b).join(",");
+const cloneName = sig => sig ? (meta.cloneNames[sig] || "") : "";
 
 function info(id){
   const d = data[id] || {}, now = Date.now();
   const r = {id, name:chars[id].name, error:d.error, authError:d.authError, loading:!d.queue && !d.error, wallet:d.wallet,
-             freeSP:d.skills?.unallocated_sp || 0, totalSP:d.skills?.total_sp, account:accountOf(id),
+             freeSP:d.skills?.unallocated_sp || 0, totalSP:d.skills?.total_sp, account:accountOf(id), label:labelOf(id),
              corp:names[d.corpId] || "", system:names[d.location?.solar_system_id] || "",
              ship:names[d.ship?.ship_type_id] || "", shipName:d.ship?.ship_name || ""};
+  r.groupKey = r.account || "#" + id;   // characters without an account count as their own account
   r.docked = d.location?.station_id ? names[d.location.station_id] : d.location?.structure_id ? names["s"+d.location.structure_id] : "";
-  // hide EVE's default ship names ("Type - Character", "Character's Type")
   if([r.ship, `${r.ship} - ${r.name}`, `${r.name}'s ${r.ship}`].includes(r.shipName)) r.shipName = "";
 
-  // industry: ready = EVE says ready, or an active job whose end time has passed
+  // industry: ready = EVE says ready, or an active job whose end time has passed. Ready jobs still hold their slot.
   const own = d.jobs || [], seen = new Set(own.map(j => j.job_id));
   const viaCorp = Object.values(corpJobs).flat().filter(j => j.installer_id === +id && !seen.has(j.job_id)).map(j => ({...j, corp:true}));
   r.jobs = [...own, ...viaCorp].map(j => {
     const end = Date.parse(j.end_date);
     const state = j.status === "ready" || (j.status === "active" && end <= now) ? "ready" : j.status === "active" ? "active" : j.status;
-    return {state, end, runs:j.runs, corp:!!j.corp, activity:ACTIVITY[j.activity_id] || "Industry", item:names[j.product_type_id || j.blueprint_type_id] || "Item"};
+    return {state, end, runs:j.runs, corp:!!j.corp, cat:CAT_OF[j.activity_id] || "M", activity:ACTIVITY[j.activity_id] || "Industry", item:names[j.product_type_id || j.blueprint_type_id] || "Item"};
   }).filter(j => ["ready","active","paused"].includes(j.state));
   r.jobsReady = r.jobs.filter(j => j.state === "ready").length;
   r.jobsActive = r.jobs.filter(j => j.state === "active").length;
   r.nextJob = Math.min(...r.jobs.filter(j => j.state === "active").map(j => j.end));   // Infinity if none
   r.hasJobs = !!d.jobs;
+  r.slotUse = {M:0, R:0, Re:0}; r.jobs.forEach(j => r.slotUse[j.cat]++);
+  if(d.skills){
+    const lvl = sid => d.skills.skills?.find(s => s.skill_id === sid)?.active_skill_level || 0;
+    r.slotCap = Object.fromEntries(Object.entries(SLOT_SKILLS).map(([k, [a, b]]) => [k, 1 + lvl(a) + lvl(b)]));
+  }
 
   // jump clone: 24h minus 1h per Infomorph Synchronizing level, from the last clone jump
   if(d.clones && d.skills){
-    const lvl = d.skills?.skills?.find(s => s.skill_id === INFOMORPH_SYNC)?.active_skill_level || 0;
+    const lvl = d.skills.skills?.find(s => s.skill_id === INFOMORPH_SYNC)?.active_skill_level || 0;
     r.jcHours = 24 - lvl;
     const last = Date.parse(d.clones.last_clone_jump_date);
     r.jcReadyAt = last ? last + r.jcHours * HOUR : 0;
-    r.jcCount = (d.clones.jump_clones || []).length;
+    r.jumpClones = (d.clones.jump_clones || []).map(j => ({id:j.jump_clone_id, implants:j.implants || [], sig:cloneSig(j.implants),
+      location: j.location_type === "structure" ? names["s"+j.location_id] || "Player structure" : names[j.location_id] || "Station"}));
+    r.jcCount = r.jumpClones.length;
   }
+  r.activeSig = d.implants ? cloneSig(d.implants) : null;
+  r.activeClone = r.activeSig === null ? "" : r.activeSig === "" ? "No implants" : cloneName(r.activeSig);
+
   // jump timers: blue = fatigue (from EVE); red = jump activation. Red isn't provided: it's 1/10 of the fatigue
   // you had before the jump, so 1/10 of the fatigue after the jump is a guaranteed "clear by" time.
   if(d.fatigue?.jump_fatigue_expire_date){
@@ -475,25 +539,48 @@ function info(id){
   r.hasFatigue = !!d.fatigue;
   r.blueLeft = r.blueEnd > now ? r.blueEnd - now : 0;
   r.redLeft = r.redEnd > now ? r.redEnd - now : 0;
-  r.implants = (d.implants || []).map(i => names[i] || "Implant " + i);
+  r.implants = (d.implants || []).map(i => ({name:names[i] || "Implant " + i, slot:slots[i] || 0})).sort((a,b) => a.slot - b.slot);
   r.hasImplants = !!d.implants;
 
-  if(r.error && (r.authError || !d.queue)){ r.status="bad"; r.label=r.authError ? "Sign in again" : "Couldn't load, will retry"; r.queueEnd=-Infinity; return r; }
-  if(r.loading){ r.status="mute"; r.label="Loading…"; r.queueEnd=Infinity; return r; }
+  if(r.error && (r.authError || !d.queue)){ r.status="bad"; r.label2=r.authError ? "Sign in again" : "Couldn't load, will retry"; r.queueEnd=-Infinity; return r; }
+  if(r.loading){ r.status="mute"; r.label2="Loading…"; r.queueEnd=Infinity; return r; }
   const active = d.queue.filter(q => !q.finish_date || Date.parse(q.finish_date) > now);
   r.active = active;
-  if(!active.length){ r.status="bad"; r.label="Queue empty"; r.queueEnd=-1; }
-  else if(!active[0].finish_date){ r.status="bad"; r.label="Queue paused"; r.queueEnd=-1; r.next=skillLabel(active[0]); }
+  if(!active.length){ r.status="bad"; r.label2="Queue empty"; r.queueEnd=-1; }
+  else if(!active[0].finish_date){ r.status="bad"; r.label2="Not training"; r.queueEnd=-1; r.next=skillLabel(active[0]); }
   else{
     r.cur = active[0]; r.training = skillLabel(r.cur);
     r.skillEnd = Date.parse(r.cur.finish_date); r.skillStart = Date.parse(r.cur.start_date) || now;
     r.queueEnd = Date.parse(active[active.length-1].finish_date);
     r.status = r.queueEnd - now < DAY ? "warn" : "ok";
-    r.label = r.status === "warn" ? "Ends in < 24h" : "Training";
+    r.label2 = r.status === "warn" ? "Ends in < 24h" : "Training";
   }
   return r;
 }
 const DOT = {ok:"var(--ok)", warn:"var(--warn)", bad:"var(--bad)", mute:"var(--muted)"};
+
+// Accounts: one character training at a time is normal, so an account only needs attention when NONE of its
+// characters is training. An account's queue = the longest queue among its training characters.
+function accountSummary(all){
+  const acc = {};
+  for(const x of all){
+    const a = acc[x.groupKey] ||= {key:x.groupKey, label:x.account || x.name, chars:[], queueEnd:-1, loaded:true};
+    a.chars.push(x);
+    if(x.loading || (x.error && !x.active)) a.loaded = false;
+    if(x.cur) a.queueEnd = Math.max(a.queueEnd, x.queueEnd);
+  }
+  for(const a of Object.values(acc)){
+    a.training = a.queueEnd > 0;
+    a.stopped = a.loaded && !a.training;
+    a.queueLeft = a.training ? a.queueEnd - Date.now() : 0;
+  }
+  return acc;
+}
+// A character that isn't training is only a problem when its whole account has stopped
+function rowStatus(x, acc){
+  if(x.status !== "bad" || x.error || !x.active) return x.status;
+  return acc[x.groupKey]?.training ? "mute" : "bad";
+}
 
 function omegaInfo(label){
   const date = meta.omega[label];
@@ -507,6 +594,14 @@ function omegaInfo(label){
 /* ---------- Rendering ---------- */
 function route(){ const h = location.hash; return h.startsWith("#c/") ? {view:"detail", id:h.slice(3)} : h === "#accounts" ? {view:"accounts"} : {view:"overview"}; }
 
+// Background redraws wait while you're typing in a box, so what you type isn't wiped
+let pendingRender = false;
+function safeRender(){
+  if(document.activeElement?.tagName === "INPUT"){ pendingRender = true; return; }
+  render();
+}
+document.addEventListener("focusout", () => { if(pendingRender){ pendingRender = false; setTimeout(safeRender, 0); } });
+
 let nextFinishTimer;
 function render(){
   clearTimeout(nextFinishTimer);
@@ -519,42 +614,49 @@ function render(){
     return;
   }
   if(r.view === "accounts"){ app.innerHTML = accountsView(ids); return; }
-  const all = ids.map(info);
-  app.innerHTML = attentionHtml(all) + tilesHtml(all) + toolbarHtml() +
-    `<div class="main"><div id="overview" class="card">${overviewHtml(all, r.id)}</div>
+  const all = ids.map(info), acc = accountSummary(all);
+  app.innerHTML = attentionHtml(all, acc) + tilesHtml(all, acc) + toolbarHtml() +
+    `<div class="main"><div id="overview" class="card">${overviewHtml(all, acc, r.id)}</div>
      <aside id="detail" class="card">${chars[r.id] ? detailHtml(info(r.id)) : ""}</aside></div>`;
   // redraw (no EVE calls) when something changes state: a skill or job finishes, a timer runs out
   const now = Date.now();
   const ends = all.flatMap(x => [...(x.active||[]).map(q => Date.parse(q.finish_date)), ...x.jobs.filter(j => j.state === "active").map(j => j.end),
                                  x.jcReadyAt, x.blueEnd, x.redEnd]).filter(t => t > now);
-  if(ends.length) nextFinishTimer = setTimeout(render, Math.min(Math.min(...ends) - now + 1000, 2**31 - 1));
+  if(ends.length) nextFinishTimer = setTimeout(safeRender, Math.min(Math.min(...ends) - now + 1000, 2**31 - 1));
   tick();
 }
 
-function attentionHtml(all){
-  const n = f => all.filter(f).length, items = [];
-  const signin = n(x => x.authError), failing = n(x => x.error && !x.authError && x.status === "bad"), stopped = n(x => !x.error && x.status === "bad"), soon = n(x => x.status === "warn"),
-        free = n(x => x.freeSP > 0), ready = all.reduce((s,x) => s + x.jobsReady, 0);
+function attentionHtml(all, acc){
+  const n = f => all.filter(f).length, items = [], accs = Object.values(acc);
+  const signin = n(x => x.authError), failing = n(x => x.error && !x.authError && x.status === "bad");
+  const stopped = accs.filter(a => a.stopped);
+  const short = accs.filter(a => a.training && a.queueLeft < QUEUE_WARN_DAYS * DAY).sort((a,b) => a.queueLeft - b.queueLeft);
+  const ready = all.reduce((s,x) => s + x.jobsReady, 0);
   const labels = [...new Set(all.map(x => x.account).filter(Boolean))];
-  const omegaSoon = labels.filter(l => { const o = omegaInfo(l); return o && o.cls !== "c-ok"; }).length;
+  const omegaSoon = labels.filter(l => { const o = omegaInfo(l); return o && o.cls !== "c-ok"; });
   if(signin) items.push(`<span class="chip c-bad">${signin} need to sign in again</span>`);
   if(failing) items.push(`<span class="chip c-bad">${failing} couldn't load (retrying)</span>`);
-  if(stopped) items.push(`<span class="chip c-bad">${stopped} skill queue${stopped>1?"s":""} stopped</span>`);
-  if(soon) items.push(`<span class="chip c-warn">${soon} queue${soon>1?"s":""} end in under 24h</span>`);
-  if(omegaSoon) items.push(`<span class="chip c-warn">${omegaSoon} account${omegaSoon>1?"s":""}: Omega ends within 7 days</span>`);
+  for(const a of stopped) items.push(`<span class="chip c-bad">${esc(a.label)}: not training</span>`);
+  for(const a of short) items.push(`<span class="chip c-warn">${esc(a.label)}: queue <span data-cd="${a.queueEnd}"></span></span>`);
+  for(const l of omegaSoon) items.push(`<span class="chip c-warn">${esc(l)}: ${omegaInfo(l).text}</span>`);
   if(ready) items.push(`<span class="chip c-info">${ready} industry job${ready>1?"s":""} ready to deliver</span>`);
-  if(free) items.push(`<span class="chip c-ok">${free} character${free>1?"s":""} with free SP</span>`);
   return `<div class="attention"><b>Needs attention</b>${items.length ? items.join("") : `<span class="chip c-mute">All clear</span>`}</div>`;
 }
 
-function tilesHtml(all){
-  const isk = all.reduce((s,x) => s + (x.wallet||0), 0), training = all.filter(x => x.cur).length,
-        free = all.reduce((s,x) => s + x.freeSP, 0), act = all.reduce((s,x) => s + x.jobsActive, 0), ready = all.reduce((s,x) => s + x.jobsReady, 0);
+function tilesHtml(all, acc){
+  const isk = all.reduce((s,x) => s + (x.wallet||0), 0);
+  const training = Object.values(acc).filter(a => a.training).sort((a,b) => a.queueEnd - b.queueEnd);
+  const stopped = Object.values(acc).filter(a => a.stopped).length;
+  const shortest = training[0];
+  const withCap = all.filter(x => x.slotCap && x.hasJobs);
+  const use = Object.fromEntries(CATS.map(c => [c.k, withCap.reduce((s,x) => s + x.slotUse[c.k], 0)]));
+  const cap = Object.fromEntries(CATS.map(c => [c.k, withCap.reduce((s,x) => s + x.slotCap[c.k], 0)]));
   return `<div class="tiles">
     <div class="card tile"><span>Total ISK</span><strong>${fmtISK(isk)}</strong></div>
-    <div class="card tile"><span>Training</span><strong>${training} / ${all.length}</strong></div>
-    <div class="card tile"><span>Industry</span><strong>${act} active${ready ? ` · ${ready} ready` : ""}</strong></div>
-    <div class="card tile"><span>Free SP</span><strong>${fmtSP(free)}</strong></div></div>`;
+    <div class="card tile"><span>Shortest skill queue</span>
+      ${shortest ? `<strong data-cd="${shortest.queueEnd}" style="color:${shortest.queueLeft < QUEUE_WARN_DAYS*DAY ? "var(--warn)" : "inherit"}"></strong><span>${esc(shortest.label)}${stopped ? ` · <span style="color:var(--bad)">${stopped} not training</span>` : ""}</span>`
+                 : `<strong class="small">${stopped ? `<span style="color:var(--bad)">${stopped} not training</span>` : "—"}</strong>`}</div>
+    <div class="card tile"><span>Industry slots in use</span><strong class="slots">${slotsHtml(use, cap)}</strong></div></div>`;
 }
 
 function toolbarHtml(){
@@ -574,27 +676,34 @@ function industryCell(x){
   if(x.jobsActive) return `${x.jobsActive} · ${cd(x.nextJob)}`;
   return `<span class="muted">None</span>`;
 }
-function jcCell(x){ return x.jcHours == null ? "—" : x.jcReadyAt > Date.now() ? cd(x.jcReadyAt) : `<span style="color:var(--ok)">Ready</span>`; }
+function jcCell(x){
+  if(x.jcHours == null) return "—";
+  const when = x.jcReadyAt > Date.now() ? cd(x.jcReadyAt) : `<span style="color:var(--ok)">Ready</span>`;
+  return `${when}${x.activeClone ? `<div class="ell muted" style="font-size:12px">${esc(x.activeClone)}</div>` : ""}`;
+}
 function fatigueCell(x){
   if(x.redLeft) return `<span style="color:var(--bad)" title="Jump activation (red), clear by">Red ≤${cd(x.redEnd)}</span>`;
   if(x.blueLeft) return `<span style="color:var(--accent)" title="Jump fatigue (blue)">Blue ${cd(x.blueEnd)}</span>`;
   return x.hasFatigue ? `<span class="muted">None</span>` : "—";
 }
 
-function rowHtml(x, sel){
-  const status = x.cur ? `<span class="ell">${esc(x.training)}</span>` : `<span class="ell">${esc(x.label)}${x.next ? " · " + esc(x.next) : ""}</span>`;
-  const queue = x.cur ? `<b data-cd="${x.queueEnd}" style="font-weight:500;color:${x.status==="warn"?"var(--warn)":"inherit"}"></b>` : `<span style="color:${DOT[x.status]}">${x.error ? "Error" : x.loading ? "…" : "Stopped"}</span>`;
+function rowHtml(x, acc, sel){
+  const s = rowStatus(x, acc);
+  const status = x.cur ? `<span class="ell">${esc(x.training)}</span>` : `<span class="ell${s === "mute" ? " muted" : ""}">${esc(x.label2)}${x.next ? " · " + esc(x.next) : ""}</span>`;
+  const queue = x.cur ? `<b data-cd="${x.queueEnd}" style="font-weight:500;color:${x.status==="warn"?"var(--warn)":"inherit"}"></b>` : `<span style="color:${DOT[s]}">${x.error ? "Error" : x.loading ? "…" : "—"}</span>`;
   const shipLine = [x.system, x.ship].filter(Boolean).join(" · ") || "—";
   return `<a class="row ${sel?"sel":""}" href="#c/${x.id}">
     <img class="portrait" src="https://images.evetech.net/characters/${x.id}/portrait?size=64" alt="">
     <div style="min-width:0"><div class="nm ell">${esc(x.name)}</div>
-      <div class="m st muted" style="font-size:12px"><span class="dot" style="background:${DOT[x.status]}"></span>${x.cur ? "Queue " : ""}${queue}<span class="ell">· ${fmtISK(x.wallet)}</span></div></div>
-    <div class="d st"><span class="dot" style="background:${DOT[x.status]}"></span>${status}</div>
+      ${x.label ? `<div class="m" style="margin:2px 0">${labelChip(x.label)}</div>` : ""}
+      <div class="m st muted" style="font-size:12px"><span class="dot" style="background:${DOT[s]}"></span>${x.cur ? "Queue " : ""}${queue}<span class="ell">· ${fmtISK(x.wallet)}</span></div></div>
+    <div class="d">${labelChip(x.label)}</div>
+    <div class="d st"><span class="dot" style="background:${DOT[s]}"></span>${status}</div>
     <div class="d">${queue}</div>
     <div class="d">${industryCell(x)}</div>
     <div class="d">${fmtISK(x.wallet)}</div>
     <div class="d ell">${esc(shipLine)}</div>
-    <div class="d">${jcCell(x)}</div>
+    <div class="d" style="min-width:0">${jcCell(x)}</div>
     <div class="d">${fatigueCell(x)}</div>
     <div class="m" style="flex-direction:column;align-items:flex-end;gap:4px">
       ${x.freeSP ? `<span class="chip sm c-ok">${fmtSP(x.freeSP)} free</span>` : ""}
@@ -604,8 +713,8 @@ function rowHtml(x, sel){
   </a>`;
 }
 
-function overviewHtml(all, selId){
-  const head = `<div class="thead"><span></span><span>Character</span><span>Training</span><span>Queue ends</span><span>Industry</span><span>Wallet</span><span>Location · ship</span><span>Jump clone</span><span>Jump timers</span></div>`;
+function overviewHtml(all, acc, selId){
+  const head = `<div class="thead"><span></span><span>Character</span><span>Label</span><span>Training</span><span>Queue ends</span><span>Industry</span><span>Wallet</span><span>Location · ship</span><span>Jump clone</span><span>Jump timers</span></div>`;
   if(sortBy !== "account"){
     const cmp = {
       queue:(a,b) => a.queueEnd - b.queueEnd,
@@ -613,72 +722,99 @@ function overviewHtml(all, selId){
       fatigue:(a,b) => (b.blueLeft - a.blueLeft) || a.name.localeCompare(b.name),
       wallet:(a,b) => (b.wallet||0) - (a.wallet||0),
       name:(a,b) => a.name.localeCompare(b.name)}[sortBy] || ((a,b) => a.name.localeCompare(b.name));
-    return head + all.slice().sort(cmp).map(x => rowHtml(x, x.id === selId)).join("");
+    return head + all.slice().sort(cmp).map(x => rowHtml(x, acc, x.id === selId)).join("");
   }
   const groups = Object.create(null);
   all.forEach(x => (groups[x.account || ""] ||= []).push(x));
   const labels = Object.keys(groups).sort(compareAccounts);
   return head + labels.map(l => {
-    const o = omegaInfo(l), list = groups[l].sort((a,b) => compareChars(a.id, b.id));
-    const alerts = list.filter(x => x.status === "bad" || x.status === "warn").length;
+    const o = omegaInfo(l), list = groups[l].sort((a,b) => compareChars(a.id, b.id)), a = l ? acc[l] : null;
+    const qinfo = !a ? "" : a.stopped ? `<span style="font-size:12px;color:var(--bad)">Not training</span>`
+      : a.training ? `<span style="font-size:12px;color:${a.queueLeft < QUEUE_WARN_DAYS*DAY ? "var(--warn)" : "var(--muted)"}">Queue <span data-cd="${a.queueEnd}"></span></span>` : "";
     return `<div class="group"><strong>${l ? esc(l) : "Unassigned"}</strong>
       ${o ? `<span class="chip sm ${o.cls}">${o.text}</span>` : l ? `<a href="#accounts" class="chip sm c-mute" style="text-decoration:none">Set Omega date</a>` : `<a href="#accounts" style="font-size:12px">Assign accounts</a>`}
-      <span class="muted" style="font-size:12px">${list.length} character${list.length>1?"s":""}</span>
-      ${alerts ? `<span style="font-size:12px;color:var(--warn)">${alerts} need attention</span>` : ""}</div>` +
-      list.map(x => rowHtml(x, x.id === selId)).join("");
+      ${qinfo}
+      <span class="muted" style="font-size:12px">${list.length} character${list.length>1?"s":""}</span></div>` +
+      list.map(x => rowHtml(x, acc, x.id === selId)).join("");
   }).join("");
 }
+
+// Collapsible sections in the character detail; which ones are closed is remembered on this device
+const closedSecs = new Set(store.get("eve.closed", []));
+function section(key, title, extra, body){
+  return `<details class="sec" data-sec="${key}" ${closedSecs.has(key) ? "" : "open"}><summary><span>${title}</span>${extra || ""}</summary>${body}</details>`;
+}
+document.addEventListener("toggle", e => {
+  const k = e.target?.dataset?.sec; if(!k) return;
+  if(e.target.open) closedSecs.delete(k); else closedSecs.add(k);
+  store.set("eve.closed", [...closedSecs]);
+}, true);
 
 function detailHtml(x){
   const o = omegaInfo(x.account), now = Date.now();
   let queue = "";
   if(x.error && (x.authError || x.loading === false && !x.active)) queue = `<div class="err">Couldn't load: ${esc(x.error)}.</div>${x.authError ? `<button class="primary" onclick="startLogin()">Sign in again</button>` : `<p class="muted" style="font-size:13px">It will retry automatically.</p>`}`;
   else if(x.loading) queue = `<p class="muted">Loading…</p>`;
-  else if(!x.cur) queue = `<span class="chip c-bad">${esc(x.label)}${x.next ? " — " + esc(x.next) + " is next" : ""}</span>`;
+  else if(!x.cur) queue = `<span class="chip c-mute">${esc(x.label2)}${x.next ? " — " + esc(x.next) + " is next" : ""}</span>`;
   else queue = `<div style="font-size:14px">${esc(x.training)}</div>
       <div class="bar"><div data-start="${x.skillStart}" data-end="${x.skillEnd}"></div></div>
       <div class="kv" style="border:0;padding-top:0"><span>Skill</span><span data-cd="${x.skillEnd}"></span></div>
       <div class="kv"><span>Whole queue</span><span data-cd="${x.queueEnd}" style="color:${x.status==="warn"?"var(--warn)":"inherit"}"></span></div>
       ${x.active.slice(1).map(q => `<div class="kv"><span class="ell">${esc(skillLabel(q))}</span><span data-cd="${Date.parse(q.finish_date)}"></span></div>`).join("")}`;
+
+  const jobRow = j => `<div class="kv"><span class="ell"><span style="color:${CAT_COLOR[j.cat]}">${esc(j.activity)}</span> · ${esc(j.item)}${j.runs > 1 ? " ×" + j.runs : ""}${j.corp ? ` <span class="muted">· corp</span>` : ""}</span>
+      <span>${j.state === "ready" ? `<span class="chip sm c-info">Ready</span>` : j.state === "paused" ? `<span class="muted">Paused</span>` : cd(j.end)}</span></div>`;
   const jobs = !x.hasJobs ? `<p class="muted" style="font-size:13px">—</p>` : !x.jobs.length ? `<p class="muted" style="font-size:13px">No active jobs</p>` :
-    x.jobs.slice().sort((a,b) => (a.state==="ready" ? 0 : 1) - (b.state==="ready" ? 0 : 1) || a.end - b.end).map(j =>
-      `<div class="kv"><span class="ell">${esc(j.activity)} · ${esc(j.item)}${j.runs > 1 ? " ×" + j.runs : ""}${j.corp ? ` <span class="muted">· corp</span>` : ""}</span>
-        <span>${j.state === "ready" ? `<span class="chip sm c-info">Ready</span>` : j.state === "paused" ? `<span class="muted">Paused</span>` : cd(j.end)}</span></div>`).join("");
+    CATS.map(c => {
+      const list = x.jobs.filter(j => j.cat === c.k).sort((a,b) => (a.state==="ready" ? 0 : 1) - (b.state==="ready" ? 0 : 1) || a.end - b.end);
+      return list.length ? `<div class="subhead" style="color:${c.color}">${c.name} · ${list.length}</div>${list.map(jobRow).join("")}` : "";
+    }).join("");
+  const slotSummary = x.slotCap ? `<span class="slots">${slotsHtml(x.slotUse, x.slotCap)}</span>` : "";
+
   const jc = x.jcHours == null ? "—" : x.jcReadyAt > now ? cd(x.jcReadyAt) : `<span style="color:var(--ok)">Ready</span>`;
+  const implantList = list => list.length ? list.map(i => `<div class="kv"><span>${i.slot ? "Slot " + i.slot : "Implant"}</span><span class="ell">${esc(i.name)}</span></div>`).join("")
+                                          : `<div class="kv"><span>Implants</span><span>None</span></div>`;
+  const nameBox = (sig, current) => sig ? `<input class="clonename" placeholder="Name this clone" value="${esc(meta.cloneNames[sig] || "")}" aria-label="Clone name" onchange="setCloneName('${sig}', this.value)">`
+                                        : `<span class="muted" style="font-size:13px">No implants (can't be named)</span>`;
+  const implantsOf = ids => (ids || []).map(i => ({name:names[i] || "Implant " + i, slot:slots[i] || 0})).sort((a,b) => a.slot - b.slot);
+  const clones = x.jumpClones == null ? `<p class="muted" style="font-size:13px">—</p>` :
+    `<div class="clone"><div class="clonehead"><b>Current clone</b>${x.activeSig !== null ? nameBox(x.activeSig) : ""}</div>${x.hasImplants ? implantList(x.implants) : `<div class="kv"><span>Implants</span><span>—</span></div>`}</div>` +
+    x.jumpClones.map(j => `<div class="clone"><div class="clonehead"><span class="ell muted" style="font-size:12px">${esc(j.location)}</span>${nameBox(j.sig)}</div>${implantList(implantsOf(j.implants))}</div>`).join("");
+
   return `<a class="back" href="#">← Overview</a>
     <div class="dhead"><img src="https://images.evetech.net/characters/${x.id}/portrait?size=128" alt="">
       <div style="min-width:0"><h2 class="ell">${esc(x.name)}</h2>
         <div class="muted" style="font-size:12px">${esc(x.corp || "")}${x.totalSP ? " · " + fmtSP(x.totalSP) + " SP" : ""}</div></div></div>
     <div style="display:flex;flex-wrap:wrap;gap:6px">
       <span class="chip sm c-mute">${x.account ? esc(x.account) : "No account set"}</span>
+      ${labelChip(x.label)}
       ${o ? `<span class="chip sm ${o.cls}">${o.text}</span>` : ""}
       ${x.freeSP ? `<span class="chip sm c-ok">${fmtSP(x.freeSP)} free SP</span>` : ""}
     </div>
-    <h3>Skill queue</h3>${queue}
-    <h3>Industry jobs</h3>${jobs}
-    <h3>Jump timers</h3>
-    <div class="kv"><span>Jump clone${x.jcHours != null ? ` (${x.jcHours}h cooldown)` : ""}</span><span>${jc}</span></div>
-    <div class="kv"><span>Blue: jump fatigue</span><span>${x.blueLeft ? cd(x.blueEnd, "color:var(--accent)") : "None"}</span></div>
-    <div class="kv"><span>Red: jump activation</span><span>${x.redLeft ? `<span style="color:var(--bad)">clear in ≤ ${cd(x.redEnd)}</span>` : "None"}</span></div>
-    <h3>Clones and implants</h3>
-    <div class="kv"><span>Jump clones</span><span>${x.jcCount ?? "—"}</span></div>
-    ${!x.hasImplants ? `<div class="kv"><span>Implants</span><span>—</span></div>` : !x.implants.length ? `<div class="kv"><span>Implants</span><span>None</span></div>` :
-      x.implants.map(n => `<div class="kv"><span>Implant</span><span class="ell">${esc(n)}</span></div>`).join("")}
-    <h3>Status</h3>
-    <div class="kv"><span>Wallet</span><span>${fmtISK(x.wallet)} ISK</span></div>
-    <div class="kv"><span>System</span><span>${esc(x.system || "—")}</span></div>
-    <div class="kv"><span>Docked at</span><span class="ell">${esc(x.docked || (x.system ? "In space" : "—"))}</span></div>
-    <div class="kv"><span>Ship</span><span class="ell">${esc(x.ship || "—")}${x.shipName ? " · " + esc(x.shipName) : ""}</span></div>
-    <div class="kv"><span>Corporation</span><span>${esc(x.corp || "—")}</span></div>
+    ${section("skills", "Skill queue", "", queue)}
+    ${section("industry", "Industry jobs", slotSummary, jobs)}
+    ${section("timers", "Jump timers", "", `
+      <div class="kv"><span>Jump clone${x.jcHours != null ? ` (${x.jcHours}h cooldown)` : ""}</span><span>${jc}</span></div>
+      <div class="kv"><span>Blue: jump fatigue</span><span>${x.blueLeft ? cd(x.blueEnd, "color:var(--accent)") : "None"}</span></div>
+      <div class="kv"><span>Red: jump activation</span><span>${x.redLeft ? `<span style="color:var(--bad)">clear in ≤ ${cd(x.redEnd)}</span>` : "None"}</span></div>`)}
+    ${section("clones", "Jump clones", x.jcCount != null ? `<span class="muted" style="font-size:12px">${x.jcCount}</span>` : "", clones)}
+    ${section("status", "Status", "", `
+      <div class="kv"><span>Wallet</span><span>${fmtISK(x.wallet)} ISK</span></div>
+      <div class="kv"><span>System</span><span>${esc(x.system || "—")}</span></div>
+      <div class="kv"><span>Docked at</span><span class="ell">${esc(x.docked || (x.system ? "In space" : "—"))}</span></div>
+      <div class="kv"><span>Ship</span><span class="ell">${esc(x.ship || "—")}${x.shipName ? " · " + esc(x.shipName) : ""}</span></div>
+      <div class="kv"><span>Corporation</span><span>${esc(x.corp || "—")}</span></div>`)}
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <a href="#accounts" style="font-size:13px;align-self:center">Edit account</a>
       <button class="link danger" onclick="removeChar('${x.id}')">Remove from this device</button>
     </div>`;
 }
+function setCloneName(sig, v){ if(!/^[\d,]+$/.test(sig)) return; v = v.trim(); if(v) meta.cloneNames[sig] = v; else delete meta.cloneNames[sig]; saveMeta(); render(); }
 
-let acctLabels = [];   // account names in the order shown on the Accounts page (inputs refer to them by position)
+let acctLabels = [], charLabels = [];   // shown in this order on the Accounts page (inputs refer to them by position)
 function accountsView(ids){
   acctLabels = [...new Set(ids.map(accountOf).filter(Boolean))].sort(compareAccounts);
+  charLabels = [...new Set(ids.map(labelOf).filter(Boolean))].sort((a,b) => a.localeCompare(b));
   const sorted = ids.slice().sort((a,b) => compareAccounts(accountOf(a), accountOf(b)) || compareChars(a, b));
   const val = v => v === undefined ? "" : esc(v);
   return `<div class="card settings">
@@ -691,16 +827,24 @@ function accountsView(ids){
       <input id="ao_${i}" type="number" min="1" inputmode="numeric" placeholder="#" aria-label="Order of ${esc(l)}" style="flex:0 0 76px" value="${val(meta.accountOrder[l])}" onchange="setAcctOrder(${i}, this.value)">
       <input id="o_${i}" type="date" aria-label="Omega expiry for ${esc(l)}" value="${esc(meta.omega[l] || "")}" onchange="setOmega(${i}, this.value)"></div>`).join("")
       : `<p class="muted" style="font-size:13px">Name your accounts below first.</p>`}
-    <h3>Characters: account, then order within the account</h3>
+    <h3>Characters: account, order within the account, label</h3>
     <datalist id="acctList">${acctLabels.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
+    <datalist id="labelList">${charLabels.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
     ${sorted.map(id => `<div class="srow"><label for="a_${id}">${esc(chars[id].name)}</label>
       <input id="a_${id}" list="acctList" placeholder="Account name" value="${esc(accountOf(id))}" onchange="setAccount('${id}', this.value)">
-      <input type="number" min="1" inputmode="numeric" placeholder="#" aria-label="Order of ${esc(chars[id].name)}" style="flex:0 0 76px" value="${val(meta.charOrder[id])}" onchange="setCharOrder('${id}', this.value)"></div>`).join("")}
+      <input type="number" min="1" inputmode="numeric" placeholder="#" aria-label="Order of ${esc(chars[id].name)}" style="flex:0 0 76px" value="${val(meta.charOrder[id])}" onchange="setCharOrder('${id}', this.value)">
+      <input list="labelList" placeholder="Label" aria-label="Label for ${esc(chars[id].name)}" style="flex:0 1 160px" value="${esc(labelOf(id))}" onchange="setLabel('${id}', this.value)"></div>`).join("")}
+    <h3>Label colors</h3>
+    ${charLabels.length ? charLabels.map((l,i) => `<div class="srow"><label for="lc_${i}">${labelChip(l)}</label>
+      <select id="lc_${i}" onchange="setLabelColor(${i}, this.value)">${Object.keys(LABEL_COLORS).map(c => `<option value="${c}" ${(meta.labelColor[l] || "gray") === c ? "selected" : ""}>${c[0].toUpperCase() + c.slice(1)}</option>`).join("")}</select></div>`).join("")
+      : `<p class="muted" style="font-size:13px">Give characters a label above (e.g. "Main alliance", "Neutral alt") to pick its color here.</p>`}
   </div>`;
 }
 function saveMeta(){ store.set("eve.meta", meta); }
 const cleanNum = v => { v = String(v).trim(); return v === "" || isNaN(v) ? undefined : Math.max(0, Math.round(+v)); };
 function setAccount(id, v){ v = v.trim(); if(v) meta.accountOf[id] = v; else delete meta.accountOf[id]; saveMeta(); render(); }
+function setLabel(id, v){ v = v.trim(); if(v) meta.charLabel[id] = v; else delete meta.charLabel[id]; saveMeta(); render(); }
+function setLabelColor(i, v){ const l = charLabels[i]; if(!l || !LABEL_COLORS[v]) return; meta.labelColor[l] = v; saveMeta(); render(); }
 function setCharOrder(id, v){ const n = cleanNum(v); if(n === undefined) delete meta.charOrder[id]; else meta.charOrder[id] = n; saveMeta(); render(); }
 function setAcctOrder(i, v){ const l = acctLabels[i]; if(!l) return; const n = cleanNum(v); if(n === undefined) delete meta.accountOrder[l]; else meta.accountOrder[l] = n; saveMeta(); render(); }
 function setOmega(i, v){
