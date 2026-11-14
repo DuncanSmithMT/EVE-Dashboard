@@ -4,26 +4,32 @@ A personal, phone-friendly dashboard for EVE Online characters. One place to see
 
 **Live site:** https://duncansmithmt.github.io/EVE-Dashboard/
 
-## What it shows (Phase 1)
+## What it shows (Phases 1–2)
 
 ### Overview
-- **Needs attention** strip: characters that must sign in again, stopped (paused/empty) skill queues, queues ending in under 24 hours, accounts whose Omega ends within 7 days, characters with free SP.
-- **Totals:** total ISK across all characters, how many are training, total free SP.
-- **One row per character:** portrait, name, what's training, live countdown to queue end, wallet, system · ship, corporation. On a phone the row shrinks to name, status dot, queue time and wallet.
-- **View menu** (the sorted views): grouped by account (default; with each account's Omega countdown), queue ends soonest, wallet highest first, name A–Z. The choice is remembered.
+- **Needs attention** strip: characters that must sign in again, stopped (paused/empty) skill queues, queues ending in under 24 hours, accounts whose Omega ends within 7 days, industry jobs ready to deliver, characters with free SP.
+- **Totals:** total ISK across all characters, how many are training, industry jobs (active · ready), total free SP.
+- **One row per character:** portrait, name, what's training, live countdown to queue end, industry (jobs ready, or active count + next finish), wallet, system · ship, jump clone (Ready or countdown), jump timers (red or blue). On a phone the row shrinks to name, status dot, queue time and wallet, with small badges for free SP, jobs ready and red/blue timers.
+- **View menu** (the sorted views): grouped by account (default; in your display order, with each account's Omega countdown), queue ends soonest, industry (ready first, then finishing soonest), jump fatigue (most first), wallet highest first, name A–Z. The choice is remembered.
 
 ### Character detail
 Click/tap a character. On desktop it opens as a side panel; on a phone it's a full screen with a back link.
 - Account label, Omega countdown, free SP
 - Current skill with progress bar, time left on the skill and the whole queue, and every queued skill with its finish countdown
-- Wallet, system, docked station/structure (or "In space"), ship type and name, corporation
+- **Industry jobs:** activity, product/blueprint, runs, and a countdown, or Ready / Paused (ready jobs listed first)
+- **Jump timers:** jump clone cooldown (24h minus 1h per Infomorph Synchronizing level, from the last clone jump); **blue** = jump fatigue (from EVE); **red** = jump activation, shown as "clear in ≤" (see note below)
+- **Clones and implants:** number of jump clones, installed implants
+- Wallet, system, docked station/structure (or "In space"), ship type and name (EVE's default ship names are hidden), corporation
+
+**About the red timer:** EVE doesn't report the jump activation (red) timer directly. It's 1/10 of the jump fatigue the character had *before* the jump; the app only knows the fatigue *after* the jump, which is always at least as large. So the app shows a guaranteed upper bound: the red timer is definitely clear by the time shown (often earlier).
 - Remove from this device
 
 ### Accounts page
 The **Accounts** button opens a page to:
-- type each character's account name (suggestions from names already used), and
-- set an Omega expiry date per account.
-Characters without an account go under **Unassigned** at the bottom of the overview.
+- type each character's account name (suggestions from names already used),
+- set each account's **display order** number and **Omega expiry date**, and
+- set each character's **order within its account** (e.g. its launcher slot).
+Order numbers are optional: lower numbers show first; anything unnumbered goes after, alphabetically. Characters without an account go under **Unassigned** at the bottom of the overview. Note: order and Omega date are tied to the account *name*, so renaming an account means re-entering them.
 
 ### Refreshing
 Data refreshes from EVE 5 minutes after the last refresh while the page is visible, and when you reopen it (if it's been over 2 minutes). Nothing is fetched while the page is hidden. When a skill finishes, the page updates itself without asking EVE. **⟳ Refresh** forces a refresh. A temporary EVE/network error keeps showing the last good data and retries; only a real login problem asks you to sign in again. See **How much the app asks EVE for** below.
@@ -41,13 +47,14 @@ Audited 2026-11-13 against EVE's published per-route limits (the `x-rate-limit` 
 
 | Data | EVE group | EVE allowance (per character) | EVE cache time | App use with the page open |
 |---|---|---|---|---|
-| Skill queue + skills | `char-detail` | 600 tokens / 15 min | 60 s | 2 calls every 5 min ≈ 12 tokens / 15 min (2%) |
+| Skill queue + skills + implants | `char-detail` | 600 tokens / 15 min | 60 s / 60 s / 120 s | 3 calls every 5 min ≈ 18 tokens / 15 min (3%) |
 | Wallet | `char-wallet` | 150 tokens / 15 min | 120 s | 1 call every 5 min ≈ 6 tokens / 15 min (4%) |
-| Location + ship | `char-location` | 1200 tokens / 15 min | 5 s | 2 calls every 5 min ≈ 12 tokens / 15 min (1%) |
+| Location + ship + jump clones + fatigue | `char-location` | 1200 tokens / 15 min | 5 s / 5 s / 120 s / 300 s | 4 calls every 5 min ≈ 24 tokens / 15 min (2%) |
+| Industry jobs | `char-industry` | 600 tokens / 15 min | 300 s | 1 call every 5 min ≈ 6 tokens / 15 min (1%) |
 | Public character info (corporation) | none (error limit only) | — | 24 h | Repeats are served from the browser's cache; ~1 real call per character per day |
 | Names (skills, ships, systems…) | none | — | — | Only IDs not seen before; stored on the device |
 
-**Totals for 28 characters:** about 140 calls every 5 minutes (≈0.5 per second) while the page is open and visible; **zero while it's hidden** or closed. Each open window/device polls on its own.
+**Totals for 28 characters (Phase 2):** about 250 calls every 5 minutes (≈0.85 per second; 9 per character, plus the cached corporation lookup) while the page is open and visible; **zero while it's hidden** or closed. Each open window/device polls on its own. Simulated and re-checked when Phase 2 was built.
 
 Rules the app follows:
 - **Refresh timing:** 5 minutes after the previous refresh *finished* (EVE asks apps not to fire on a fixed clock), never while the page is hidden. On reopening, it refreshes if the last sync was over 2 minutes ago. A tab opened in the background waits until it's looked at.
@@ -152,13 +159,13 @@ No scope lets anyone move ISK or items, trade, log into the game, or change acco
 |---|---|---|---|
 | 1 | Skill queues | ESI | ✅ Built |
 | — | Layout B + sorted views | — | ✅ Built (Phase 1) |
-| 2 | Industry jobs | ESI | Manufacturing, research, invention, reactions; "ready to deliver" alerts |
-| 3 | Red / blue jump timers | ESI + calculation | Red = jump fatigue expiry (direct). Blue = jump activation cooldown, **estimated** from last jump and fatigue; shown as "approx." |
+| 2 | Industry jobs | ESI | ✅ Built (Phase 2): manufacturing, research, copying, invention, reactions; "ready to deliver" alerts |
+| 3 | Red / blue jump timers | ESI + calculation | ✅ Built (Phase 2). **Blue = jump fatigue** (direct from EVE). **Red = jump activation**, not provided by EVE; shown as a guaranteed "clear by" upper bound (1/10 of post-jump fatigue). (Earlier notes had the colors swapped; corrected using CCP's definitions.) |
 | 4 | Wallet balance | ESI | ✅ Built (Phase 1): per character plus total |
 | 5 | Market orders | ESI | Buy/sell, location, expiry |
-| 6 | Jump clone cooldown | ESI + calculation | Last clone jump time + cooldown length from the Infomorph Synchronizing skill |
+| 6 | Jump clone cooldown | ESI + calculation | ✅ Built (Phase 2): last clone jump + (24h − 1h per Infomorph Synchronizing level) |
 | 7 | Character location | ESI | ✅ Built (Phase 1): system, station/structure, ship. Online status not yet |
-| 8 | Installed implants | ESI | Active clone (jump clone implants also available) |
+| 8 | Installed implants | ESI | ✅ Built (Phase 2): active clone implants, jump clone count. Jump clone locations/implants not shown |
 | 9 | Free skill points | ESI | ✅ Built |
 | 10 | Account name / grouping | **Manual entry** | ✅ Built (Phase 1). Not available from ESI (CCP: account-level information is not exposed). See below |
 | 11 | Omega status and expiry | **Manual entry** (+ inference) | ✅ Expiry date entry built (Phase 1). Omega vs Alpha inference from training speed not built |
@@ -186,10 +193,13 @@ Three layout options were mocked up for desktop and phone on 2026-11-13 (Claude 
 
 ### Build phases
 1. ✅ **Phase 1:** layout B + sorted views, account labels and Omega dates, wallet, location/ship, corporation.
-2. **Phase 2:** industry jobs, jump clone cooldown, red/blue jump timers, implants; "industry ready" and "fatigue" sorts.
+2. ✅ **Phase 2:** industry jobs, jump clone cooldown, red/blue jump timers, implants; "industry ready" and "fatigue" sorts. Also (requested 2026-11-13):
+   - **Account display order:** a number per account on the Accounts page, filled in by hand, so the overview lists accounts in the same order as in the EVE launcher (unnumbered accounts after numbered ones, then alphabetical).
+   - **Character order within each account:** same idea, a number per character, so characters appear in their launcher positions (unnumbered after numbered, then alphabetical).
+   - **Tidy-up:** hide a ship's name when it's just EVE's default (e.g. "Capsule - … - Character name").
 3. **Phase 3:** market orders, EVE mail (read).
 4. **Phase 4:** EVE mail compose (write).
 
 ## Changelog
 
-- **2026-11-13:** First release: skill queue module. Reliability fixes from code review (iOS-safe login storage, single token refresh at a time, auto re-sync when a skill finishes). Expanded to all 75 scopes. Documented the login workaround. Captured the full capability list, manual account/Omega entry decision, and three layout mockups. Chose layout B + C's sorted views. **Phase 1 built:** overview/detail layout, sorted views, Accounts page (labels + Omega dates), wallet, location/ship, corporation; staggered loading; transient errors no longer ask to sign in again. **ESI usage audit:** verified EVE's per-route limits and cache behaviour; no polling while hidden; refresh 5 min after the last one finishes; skill completion redraws locally; pause on 420/429/502–504 or near the error limit; don't repeat refused calls or failed logins; X-User-Agent header.
+- **2026-11-13:** First release: skill queue module. Reliability fixes from code review (iOS-safe login storage, single token refresh at a time, auto re-sync when a skill finishes). Expanded to all 75 scopes. Documented the login workaround. Captured the full capability list, manual account/Omega entry decision, and three layout mockups. Chose layout B + C's sorted views. **Phase 1 built:** overview/detail layout, sorted views, Accounts page (labels + Omega dates), wallet, location/ship, corporation; staggered loading; transient errors no longer ask to sign in again. **ESI usage audit:** verified EVE's per-route limits and cache behaviour; no polling while hidden; refresh 5 min after the last one finishes; skill completion redraws locally; pause on 420/429/502–504 or near the error limit; don't repeat refused calls or failed logins; X-User-Agent header. **Phase 2 built:** industry jobs, jump clone cooldown, blue (fatigue) / red (activation, upper bound) timers, implants, industry and fatigue views, account and character display order, default ship names hidden, failed optional data keeps its last value; the overview's corporation column moved to the detail view to make room (as in mockup B).
