@@ -62,7 +62,7 @@
   #overview{flex:1;min-width:0;overflow-x:auto}
   #detail{flex:0 0 400px;padding:16px;display:none}
   body.has-detail #detail{display:block}
-  .row,.thead{display:grid;grid-template-columns:36px minmax(140px,1.2fr) minmax(150px,1.3fr) 105px 120px 80px minmax(120px,1fr) minmax(95px,.8fr) 115px;
+  .row,.thead{display:grid;grid-template-columns:36px minmax(140px,1.2fr) minmax(150px,1.3fr) 105px 160px 80px minmax(120px,1fr) minmax(95px,.8fr) 115px;
     gap:10px;align-items:center;padding:8px 12px}
   .thead{font-size:12px;color:var(--muted);padding-top:10px;padding-bottom:10px}
   .row{border-top:1px solid var(--line);color:var(--text);text-decoration:none;font-size:13px;min-height:52px}
@@ -85,6 +85,15 @@
   .dhead img{width:56px;height:56px;border-radius:50%;background:var(--card2)}
   .back{display:none;margin-bottom:10px}
   .readystack{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+  .readystack .chip b{font-weight:700}
+  a.chip:hover{filter:brightness(1.2)}
+  .catkey{display:flex;flex-wrap:wrap;align-items:center;gap:14px;font-size:13px;margin:-2px 0 10px}
+  .catitem{display:inline-flex;align-items:center;gap:6px} .swatch{width:12px;height:12px;border-radius:3px;display:inline-block}
+  details.job>summary{cursor:pointer;list-style:none} details.job>summary::-webkit-details-marker{display:none}
+  details.job>summary>span:first-child::before{content:"▸ ";color:var(--muted);font-size:11px} details.job[open]>summary>span:first-child::before{content:"▾ "}
+  .jobinfo{margin:0 0 6px 14px;padding-left:10px;border-left:2px solid var(--line)} .jobinfo .kv{font-size:12px;padding:4px 0}
+  #toasts{position:fixed;right:16px;bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;z-index:10;max-width:min(360px,calc(100vw - 32px))}
+  .toast{background:var(--card2);border:1px solid var(--border);border-left:4px solid;border-radius:8px;padding:10px 14px;color:var(--text);text-decoration:none;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.4)}
   .closebtn{float:right;min-height:36px;width:36px;padding:0;font-size:18px;line-height:1}
   .err{font-size:13px;color:var(--bad);margin:8px 0}
   .empty{text-align:center;padding:40px 16px}
@@ -118,6 +127,7 @@
   </header>
   <div class="err" id="globalErr"></div>
   <div id="app"></div>
+  <div id="toasts" aria-live="polite"></div>
 </div>
 
 <script>
@@ -176,7 +186,7 @@ const SSO = "https://login.eveonline.com/v2/oauth";
 const ESI = "https://esi.evetech.net";
 const COMPAT_DATE = "2020-01-01";
 // ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
-const APP_ID = "EVE-Dashboard/1.7 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const APP_ID = "EVE-Dashboard/1.8 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
 const REFRESH_MS = 5 * 60 * 1000;
 
 /* ---------- Storage ---------- */
@@ -300,12 +310,37 @@ async function resolveNames(ids){
   store.set("eve.names", names);
 }
 
+// names["s"+id] = structure name, names["y"+id] = solar system of a station/structure (0 = unknown)
 async function resolveStructure(id, token){
   const key = "s" + id;
-  if(names[key]) return;
-  try{ names[key] = (await esi(`/universe/structures/${id}`, token)).name; }
-  catch(e){ if(e.status === 403 || e.status === 404) names[key] = "Player structure"; else return; }   // no docking access: don't keep retrying
+  if(names[key] && ("y" + id) in names) return;
+  try{ const st = await esi(`/universe/structures/${id}`, token); names[key] = st.name; names["y"+id] = st.solar_system_id || 0; }
+  catch(e){ if(e.status === 403 || e.status === 404){ names[key] = "Player structure"; names["y"+id] = 0; } else return; }   // no docking access: don't keep retrying
   store.set("eve.names", names);
+}
+async function resolveStation(id){
+  if(("y" + id) in names) return;
+  try{ const st = await esi(`/universe/stations/${id}`, null); names[id] = st.name; names["y"+id] = st.system_id || 0; }   // public, never changes
+  catch(e){ if(e.status === 404){ names["y"+id] = 0; } else return; }
+  store.set("eve.names", names);
+}
+// where an industry job runs: a station (below 100 million) or a player structure
+async function resolveFacilities(jobs, token){
+  for(const id of [...new Set(jobs.map(j => j.facility_id).filter(Boolean))]){
+    if(id >= 1e12) await resolveStructure(id, token); else await resolveStation(id);
+  }
+  await resolveNames(jobs.map(j => names["y" + j.facility_id]).filter(Boolean));
+}
+
+// System cost indices (public, about 2 MB, EVE refreshes hourly): only loaded when a character's industry is opened
+let sysIndex = null, sysIndexAt = 0, sysIndexReq = null, sysIndexFailAt = 0;
+const indicesFresh = () => (sysIndex && Date.now() - sysIndexAt < 36e5) || Date.now() - sysIndexFailAt < 5 * 6e4;   // failed: wait 5 min
+function loadIndices(){
+  if(indicesFresh()) return Promise.resolve();
+  return sysIndexReq ||= esi("/industry/systems", null).then(list => {
+    sysIndex = Object.fromEntries(list.map(sy => [sy.solar_system_id, Object.fromEntries(sy.cost_indices.map(c => [c.activity, c.cost_index]))]));
+    sysIndexAt = Date.now();
+  }).catch(() => { sysIndexFailAt = Date.now(); }).finally(() => { sysIndexReq = null; });
 }
 
 const refused = {};   // "<charId>:<route>" -> true after a 403, so it isn't retried every refresh this session
@@ -325,7 +360,7 @@ async function loadChar(c){
       esi(`/characters/${c.id}/skills`, t)
     ]);
     // extras: a failure here shouldn't hide the skill queue
-    const [wallet, location, ship, pub, jobs, clones, fatigue, implants, roles] = (await Promise.allSettled([
+    const [wallet, location, ship, pub, jobs, clones, fatigue, implants, roles, online] = (await Promise.allSettled([
       extra(c, "wallet",   () => esi(`/characters/${c.id}/wallet`, t)),
       extra(c, "location", () => esi(`/characters/${c.id}/location`, t)),
       extra(c, "ship",     () => esi(`/characters/${c.id}/ship`, t)),
@@ -334,7 +369,8 @@ async function loadChar(c){
       extra(c, "clones",   () => esi(`/characters/${c.id}/clones`, t)),
       extra(c, "fatigue",  () => esi(`/characters/${c.id}/fatigue`, t)),         // EVE cache 5 min
       extra(c, "implants", () => esi(`/characters/${c.id}/implants`, t)),
-      extra(c, "roles",    () => esi(`/characters/${c.id}/roles`, t))            // EVE cache 1h: who may read corp industry jobs
+      extra(c, "roles",    () => esi(`/characters/${c.id}/roles`, t)),           // EVE cache 1h: who may read corp industry jobs
+      extra(c, "online",   () => esi(`/characters/${c.id}/online`, t))           // last login / logout, online now
     ])).map(r => r.status === "fulfilled" ? r.value : null);
     queue.sort((a,b) => a.queue_position - b.queue_position);
     if(location?.structure_id) await resolveStructure(location.structure_id, t);
@@ -346,11 +382,12 @@ async function loadChar(c){
                         ...(jobs||[]).map(j => j.product_type_id || j.blueprint_type_id), ...allImplants,
                         ...jcs.filter(j => j.location_type === "station").map(j => j.location_id)]);
     await resolveSlots(allImplants);
+    if(jobs) await resolveFacilities(jobs, t);
     const prev = data[c.id] || {};             // a failed extra keeps showing its last good value
     if(chars[c.id]) data[c.id] = {queue, skills,   // (also clears any old error)
       wallet: wallet ?? prev.wallet, location: location ?? prev.location, ship: ship ?? prev.ship,
       corpId: pub?.corporation_id ?? prev.corpId, jobs: jobs ?? prev.jobs, clones: clones ?? prev.clones,
-      fatigue: fatigue ?? prev.fatigue, implants: implants ?? prev.implants, roles: roles ?? prev.roles};
+      fatigue: fatigue ?? prev.fatigue, implants: implants ?? prev.implants, roles: roles ?? prev.roles, online: online ?? prev.online};
   }catch(e){
     if(e.status === "paused") return;          // not this character's fault; keep last good data
     const auth = [400,401,403].includes(e.status);
@@ -383,6 +420,7 @@ async function loadCorpJobs(){
         const ids = new Set();                   // a job can repeat across pages if the list shifts between requests
         const mine = jobs.filter(j => chars[j.installer_id] && !ids.has(j.job_id) && ids.add(j.job_id));
         await resolveNames(mine.map(j => j.product_type_id || j.blueprint_type_id));
+        await resolveFacilities(mine, t);
         corpJobs[corpId] = mine;
         allRefused = false;
         break;                                   // one reader per corporation is enough
@@ -509,7 +547,10 @@ function info(id){
   r.jobs = [...own, ...viaCorp].map(j => {
     const end = Date.parse(j.end_date);
     const state = j.status === "ready" || (j.status === "active" && end <= now) ? "ready" : j.status === "active" ? "active" : j.status;
-    return {state, end, runs:j.runs, corp:!!j.corp, cat:CAT_OF[j.activity_id] || "M", activity:ACTIVITY[j.activity_id] || "Industry", item:names[j.product_type_id || j.blueprint_type_id] || "Item"};
+    const fac = j.facility_id, sys = names["y" + fac];
+    return {state, end, runs:j.runs, corp:!!j.corp, cat:CAT_OF[j.activity_id] || "M", activityId:j.activity_id, activity:ACTIVITY[j.activity_id] || "Industry", item:names[j.product_type_id || j.blueprint_type_id] || "Item",
+            id:j.job_id, start:Date.parse(j.start_date), cost:j.cost, licensed:j.licensed_runs, probability:j.probability,
+            facility: !fac ? "—" : fac >= 1e12 ? names["s" + fac] || "Player structure" : names[fac] || "Station", systemId: sys || 0, system: sys ? names[sys] || "" : ""};
   }).filter(j => ["ready","active","paused"].includes(j.state));
   r.jobsReady = r.jobs.filter(j => j.state === "ready").length;
   r.jobsActive = r.jobs.filter(j => j.state === "active").length;
@@ -542,6 +583,7 @@ function info(id){
     if(from && r.blueEnd > from) r.redEnd = from + (r.blueEnd - from) / 10;
   }
   r.hasFatigue = !!d.fatigue;
+  r.online = d.online;
   r.blueLeft = r.blueEnd > now ? r.blueEnd - now : 0;
   r.redLeft = r.redEnd > now ? r.redEnd - now : 0;
   r.implants = (d.implants || []).map(i => ({name:names[i] || "Implant " + i, slot:slots[i] || 0})).sort((a,b) => a.slot - b.slot);
@@ -623,6 +665,27 @@ function omegaInfo(label){
   return {cls: days <= 7 ? "c-warn" : "c-ok", text:`Omega · ${days}d left`, days};
 }
 
+/* ---------- Toasts: jump timers finishing ---------- */
+// Shown while the dashboard is open. Timers that finished before it was opened don't toast.
+let toastSince = Date.now();
+function checkTimerToasts(all){
+  const now = Date.now();
+  for(const x of all){
+    if(x.redEnd > toastSince && x.redEnd <= now) toast(`${x.name}: jump activation (red) clear`, "var(--bad)", x.id);
+    if(x.blueEnd > toastSince && x.blueEnd <= now) toast(`${x.name}: jump fatigue (blue) gone`, "var(--accent)", x.id);
+    if(x.jcReadyAt > toastSince && x.jcReadyAt <= now) toast(`${x.name}: jump clone ready`, "var(--ok)", x.id);
+  }
+  toastSince = now;
+}
+function toast(text, color, id){
+  const box = document.getElementById("toasts"); if(!box) return;
+  const el = document.createElement("a");
+  el.className = "toast"; el.href = "#c/" + id; el.style.borderLeftColor = color; el.textContent = text;
+  el.onclick = () => el.remove();
+  box.appendChild(el);
+  setTimeout(() => el.remove(), 15000);
+}
+
 /* ---------- Rendering ---------- */
 function route(){ const h = location.hash; return h.startsWith("#c/") ? {view:"detail", id:h.slice(3)} : h === "#accounts" ? {view:"accounts"} : {view:"overview"}; }
 
@@ -647,7 +710,10 @@ function render(){
   }
   if(r.view === "accounts"){ app.innerHTML = accountsView(ids); return; }
   const all = ids.map(info), acc = accountSummary(all);
-  app.innerHTML = attentionHtml(all, acc) + tilesHtml(all, acc) + toolbarHtml() +
+  checkTimerToasts(all);
+  // industry drill-down needs system cost indices: load them (once an hour) when a character with jobs is open
+  if(chars[r.id] && all.find(x => x.id === r.id)?.jobs.length && !indicesFresh() && !sysIndexReq) loadIndices().then(safeRender);
+  app.innerHTML = attentionHtml(all, acc) + tilesHtml(all, acc) + toolbarHtml() + categoryKey() +
     `<div class="main"><div id="overview" class="card">${overviewHtml(all, acc, r.id)}</div>
      <aside id="detail" class="card">${chars[r.id] ? detailHtml(info(r.id)) : ""}</aside></div>`;
   // redraw (no EVE calls) when something changes state: a skill or job finishes, a timer runs out
@@ -665,14 +731,21 @@ function attentionHtml(all, acc){
   const short = accs.filter(a => a.training && a.queueLeft < QUEUE_WARN_DAYS * DAY).sort((a,b) => a.queueLeft - b.queueLeft);
   const labels = [...new Set(all.map(x => x.account).filter(Boolean))];
   const omegaSoon = labels.filter(l => { const o = omegaInfo(l); return o && (o.cls === "c-warn" || o.cls === "c-bad"); });
-  if(signin) items.push(`<span class="chip c-bad">${signin} need to sign in again</span>`);
-  if(failing) items.push(`<span class="chip c-bad">${failing} couldn't load (retrying)</span>`);
-  for(const a of stopped) items.push(`<span class="chip c-bad">${esc(a.label)}: not training</span>`);
-  for(const a of short) items.push(`<span class="chip c-warn">${esc(a.label)}: queue <span data-cd="${a.queueEnd}"></span></span>`);
-  for(const l of omegaSoon) items.push(`<span class="chip c-warn">${esc(l)}: ${omegaInfo(l).text}</span>`);
+  // each item links to what needs attention: a character's details, the Accounts page, or the industry view
+  const go = (href, cls, style, text) => `<a class="chip ${cls}" href="${href}" style="text-decoration:none;${style}">${text}</a>`;
+  const firstOf = list => list.slice().sort((a,b) => compareChars(a.id, b.id))[0];
+  const signers = all.filter(x => x.authError), fails = all.filter(x => x.error && !x.authError && x.status === "bad");
+  if(signin) items.push(go(`#c/${firstOf(signers).id}`, "c-bad", "", `${signin} need to sign in again`));
+  if(failing) items.push(go(`#c/${firstOf(fails).id}`, "c-bad", "", `${failing} couldn't load (retrying)`));
+  for(const a of stopped) items.push(go(`#c/${firstOf(a.chars).id}`, "c-bad", "", `${esc(a.label)}: not training`));
+  for(const a of short){ const tr = a.chars.filter(x => x.cur).sort((p,q) => q.queueEnd - p.queueEnd)[0];
+    items.push(go(`#c/${tr.id}`, "c-warn", "", `${esc(a.label)}: queue <span data-cd="${a.queueEnd}"></span>`)); }
+  for(const l of omegaSoon) items.push(go("#accounts", "c-warn", "", `${esc(l)}: ${omegaInfo(l).text}`));
   for(const c of CATS){
-    const k = all.reduce((s,x) => s + x.jobs.filter(j => j.state === "ready" && j.cat === c.k).length, 0);
-    if(k) items.push(`<span class="chip" style="color:${c.color};background:${c.color}22">${k} ${c.name.toLowerCase()} job${k>1?"s":""} ready to deliver</span>`);
+    const who = all.filter(x => x.jobs.some(j => j.state === "ready" && j.cat === c.k));
+    const k = who.reduce((s,x) => s + x.jobs.filter(j => j.state === "ready" && j.cat === c.k).length, 0);
+    if(k) items.push(who.length === 1 ? go(`#c/${who[0].id}`, "", `color:${c.color};background:${c.color}22`, `${k} ${c.name.toLowerCase()} job${k>1?"s":""} ready to deliver`)
+      : `<a class="chip" href="#" onclick="setSort('industry');return false" style="text-decoration:none;color:${c.color};background:${c.color}22">${k} ${c.name.toLowerCase()} jobs ready to deliver (${who.length} characters)</a>`);
   }
   return `<div class="attention"><b>Needs attention</b>${items.length ? items.join("") : `<span class="chip c-mute">All clear</span>`}</div>`;
 }
@@ -705,16 +778,19 @@ function toolbarHtml(){
 function setSort(v){ sortBy = v; store.set("eve.sort", v); render(); }
 
 const cd = (t, style="") => `<span data-cd="${t}" style="${style}"></span>`;
-// one chip per job type with jobs ready, stacked manufacturing / research / reactions
-function readyChips(x, short){
-  return CATS.map(c => { const k = x.jobs.filter(j => j.state === "ready" && j.cat === c.k).length;
-    return k ? `<span class="chip sm" style="color:${c.color};background:${c.color}22">${k} ${short ? c.k : c.name.toLowerCase()} ready</span>` : ""; }).join("");
+// one chip per job type (stacked manufacturing / research / reactions) with running and ready counts
+function typeChips(x){
+  return CATS.map(c => {
+    const list = x.jobs.filter(j => j.cat === c.k);
+    if(!list.length) return "";
+    const run = list.filter(j => j.state === "active").length, ready = list.filter(j => j.state === "ready").length, paused = list.filter(j => j.state === "paused").length;
+    const parts = [run ? `${run} running` : "", paused ? `${paused} paused` : "", ready ? `<b>${ready} ready</b>` : ""].filter(Boolean).join(" · ");
+    return `<span class="chip sm" title="${c.name}" style="color:${c.color};background:${c.color}22">${c.k} ${parts}</span>`;
+  }).join("");
 }
 function industryCell(x){
   if(!x.hasJobs) return "—";
-  if(x.jobsReady) return `<div class="readystack">${readyChips(x)}</div>${x.jobsActive ? `<span class="muted" style="font-size:12px">+${x.jobsActive} running</span>` : ""}`;
-  if(x.jobsActive) return `${x.jobsActive} · ${cd(x.nextJob)}`;
-  return `<span class="muted">None</span>`;
+  return x.jobs.length ? `<div class="readystack">${typeChips(x)}</div>` : `<span class="muted">None</span>`;
 }
 function jcCell(x){
   if(x.jcHours == null) return "—";
@@ -745,12 +821,18 @@ function rowHtml(x, acc, sel){
     <div class="d">${fatigueCell(x)}</div>
     <div class="m" style="flex-direction:column;align-items:flex-end;gap:4px">
       ${x.freeSP ? `<span class="chip sm c-ok">${fmtSP(x.freeSP)} free</span>` : ""}
-      ${x.jobsReady ? readyChips(x, true) : ""}
+      ${x.jobs.length ? typeChips(x) : ""}
       ${x.redLeft ? `<span class="chip sm c-bad">Red</span>` : x.blueLeft ? `<span class="chip sm c-info">Blue</span>` : ""}
     </div>
   </a>`;
 }
 
+// key for the character category colors (the colored left edge of each row)
+function categoryKey(){
+  const cats = [...new Set(Object.keys(chars).map(labelOf).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+  if(!cats.length) return "";
+  return `<div class="catkey"><span class="muted">Categories</span>${cats.map(l => `<span class="catitem"><span class="swatch" style="background:${labelColor(l)}"></span>${esc(l)}</span>`).join("")}<a href="#accounts" style="font-size:12px">Edit</a></div>`;
+}
 function overviewHtml(all, acc, selId){
   const head = `<div class="thead"><span></span><span>Character</span><span>Training</span><span>Queue ends</span><span>Industry</span><span>Wallet</span><span>Location · ship</span><span>Jump clone</span><span>Jump timers</span></div>`;
   if(sortBy !== "account"){
@@ -800,8 +882,28 @@ function detailHtml(x){
       <div class="kv"><span>Whole queue</span><span data-cd="${x.queueEnd}" style="color:${x.status==="warn"?"var(--warn)":"inherit"}"></span></div>
       ${x.active.slice(1).map(q => `<div class="kv"><span class="ell">${esc(skillLabel(q))}</span><span data-cd="${Date.parse(q.finish_date)}"></span></div>`).join("")}`;
 
-  const jobRow = j => `<div class="kv"><span class="ell"><span style="color:${CAT_COLOR[j.cat]}">${esc(j.activity)}</span> · ${esc(j.item)}${j.runs > 1 ? " ×" + j.runs : ""}${j.corp ? ` <span class="muted">· corp</span>` : ""}</span>
-      <span>${j.state === "ready" ? `<span class="chip sm c-info">Ready</span>` : j.state === "paused" ? `<span class="muted">Paused</span>` : cd(j.end)}</span></div>`;
+  // each job opens to show where it runs and that system's cost indices
+  const IDX = [["manufacturing","Manufacturing"],["researching_material_efficiency","ME research"],["researching_time_efficiency","TE research"],["copying","Copying"],["invention","Invention"],["reaction","Reactions"]];
+  const ACT_IDX = {1:"manufacturing", 3:"researching_time_efficiency", 4:"researching_material_efficiency", 5:"copying", 8:"invention", 9:"reaction", 11:"reaction"};
+  const pct = v => v == null ? "—" : (v * 100).toFixed(2) + "%";
+  const fmtWhen = t => t ? new Date(t).toLocaleString([], {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}) : "—";
+  const jobRow = j => {
+    const idx = sysIndex && j.systemId ? sysIndex[j.systemId] : null;
+    const indices = !j.systemId ? `<div class="kv"><span>System cost indices</span><span class="muted">Unknown system</span></div>`
+      : !idx ? `<div class="kv"><span>System cost indices</span><span class="muted">${sysIndex ? "None listed" : sysIndexFailAt ? "Couldn't load, will retry" : "Loading…"}</span></div>`
+      : IDX.map(([k, label]) => `<div class="kv"><span${ACT_IDX[j.activityId] === k ? ` style="color:${CAT_COLOR[j.cat]}"` : ""}>${label} index</span><span${ACT_IDX[j.activityId] === k ? ` style="color:${CAT_COLOR[j.cat]};font-weight:600"` : ""}>${pct(idx[k])}</span></div>`).join("");
+    return `<details class="job"><summary class="kv"><span class="ell"><span style="color:${CAT_COLOR[j.cat]}">${esc(j.activity)}</span> · ${esc(j.item)}${j.runs > 1 ? " ×" + j.runs : ""}${j.corp ? ` <span class="muted">· corp</span>` : ""}</span>
+      <span>${j.state === "ready" ? `<span class="chip sm c-info">Ready</span>` : j.state === "paused" ? `<span class="muted">Paused</span>` : cd(j.end)}</span></summary>
+      <div class="jobinfo">
+        <div class="kv"><span>Location</span><span class="ell">${esc(j.facility)}</span></div>
+        <div class="kv"><span>System</span><span>${esc(j.system || "—")}</span></div>
+        <div class="kv"><span>Started · ends</span><span>${fmtWhen(j.start)} · ${fmtWhen(j.end)}</span></div>
+        <div class="kv"><span>Runs</span><span>${j.runs ?? "—"}${j.licensed && j.licensed !== j.runs ? ` (blueprint: ${j.licensed} licensed)` : ""}</span></div>
+        ${j.probability != null && j.activityId === 8 ? `<div class="kv"><span>Success chance</span><span>${Math.round(j.probability * 100)}%</span></div>` : ""}
+        <div class="kv"><span>Install cost</span><span>${j.cost != null ? fmtISK(j.cost) + " ISK" : "—"}</span></div>
+        ${indices}
+      </div></details>`;
+  };
   const jobs = !x.hasJobs ? `<p class="muted" style="font-size:13px">—</p>` : !x.jobs.length ? `<p class="muted" style="font-size:13px">No active jobs</p>` :
     CATS.map(c => {
       const list = x.jobs.filter(j => j.cat === c.k).sort((a,b) => (a.state==="ready" ? 0 : 1) - (b.state==="ready" ? 0 : 1) || a.end - b.end);
@@ -843,11 +945,19 @@ function detailHtml(x){
       <div class="kv"><span>System</span><span>${esc(x.system || "—")}</span></div>
       <div class="kv"><span>Docked at</span><span class="ell">${esc(x.docked || (x.system ? "In space" : "—"))}</span></div>
       <div class="kv"><span>Ship</span><span class="ell">${esc(x.ship || "—")}${x.shipName ? " · " + esc(x.shipName) : ""}</span></div>
-      <div class="kv"><span>Corporation</span><span>${esc(x.corp || "—")}</span></div>`)}
+      <div class="kv"><span>Corporation</span><span>${esc(x.corp || "—")}</span></div>
+      <div class="kv"><span>Last login</span><span>${!x.online ? "—" : x.online.online ? `<span style="color:var(--ok)">Online now</span>` : fmtAgo(x.online.last_login)}</span></div>
+      ${x.online?.last_logout && !x.online.online ? `<div class="kv"><span>Last logout</span><span>${fmtAgo(x.online.last_logout)}</span></div>` : ""}`)}
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <a href="#accounts" style="font-size:13px;align-self:center">Edit account</a>
       <button class="link danger" onclick="removeChar('${x.id}')">Remove from this device</button>
     </div>`;
+}
+function fmtAgo(iso){
+  const t = Date.parse(iso); if(!t) return "—";
+  const ms = Date.now() - t, d = Math.floor(ms / DAY), h = Math.floor(ms % DAY / HOUR), m = Math.floor(ms % HOUR / 6e4);
+  const ago = d ? `${d}d ${h}h ago` : h ? `${h}h ${m}m ago` : `${m}m ago`;
+  return `${ago} <span class="muted" style="font-size:12px">(${new Date(t).toLocaleString([], {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"})})</span>`;
 }
 function setCloneName(sig, v){ if(!/^[\d,]+$/.test(sig)) return; v = v.trim(); if(v) meta.cloneNames[sig] = v; else delete meta.cloneNames[sig]; saveMeta(); render(); }
 
@@ -868,17 +978,17 @@ function accountsView(ids){
       <input id="o_${i}" type="date" aria-label="Omega expiry for ${esc(l)}" value="${isAlpha(l) ? "" : esc(meta.omega[l] || "")}" ${isAlpha(l) ? "disabled" : ""} onchange="setOmega(${i}, this.value)">
       <label style="flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" ${isAlpha(l) ? "checked" : ""} onchange="setAlpha(${i}, this.checked)" style="min-height:0">Alpha</label></div>`).join("")
       : `<p class="muted" style="font-size:13px">Name your accounts below first.</p>`}
-    <h3>Characters: account, order within the account, label</h3>
+    <h3>Characters: account, order within the account, category</h3>
     <datalist id="acctList">${acctLabels.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
     <datalist id="labelList">${charLabels.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
     ${sorted.map(id => `<div class="srow"><label for="a_${id}">${esc(chars[id].name)}</label>
       <input id="a_${id}" list="acctList" placeholder="Account name" value="${esc(accountOf(id))}" onchange="setAccount('${id}', this.value)">
       <input type="number" min="1" inputmode="numeric" placeholder="#" aria-label="Order of ${esc(chars[id].name)}" style="flex:0 0 76px" value="${val(meta.charOrder[id])}" onchange="setCharOrder('${id}', this.value)">
-      <input list="labelList" placeholder="Label" aria-label="Label for ${esc(chars[id].name)}" style="flex:0 1 160px" value="${esc(labelOf(id))}" onchange="setLabel('${id}', this.value)"></div>`).join("")}
-    <h3>Label colors</h3>
+      <input list="labelList" placeholder="Category" aria-label="Category for ${esc(chars[id].name)}" style="flex:0 1 160px" value="${esc(labelOf(id))}" onchange="setLabel('${id}', this.value)"></div>`).join("")}
+    <h3>Category colors</h3>
     ${charLabels.length ? charLabels.map((l,i) => `<div class="srow"><label for="lc_${i}">${labelChip(l)}</label>
       <select id="lc_${i}" onchange="setLabelColor(${i}, this.value)">${Object.keys(LABEL_COLORS).map(c => `<option value="${c}" ${(meta.labelColor[l] || "gray") === c ? "selected" : ""}>${c[0].toUpperCase() + c.slice(1)}</option>`).join("")}</select></div>`).join("")
-      : `<p class="muted" style="font-size:13px">Give characters a label above (e.g. "Main alliance", "Neutral alt") to pick its color here.</p>`}
+      : `<p class="muted" style="font-size:13px">Give characters a category above (e.g. "Main alliance", "Neutral alt") to pick its color here. On the overview, each character's row gets a colored left edge, with a key above the list.</p>`}
   </div>`;
 }
 function saveMeta(){ store.set("eve.meta", meta); }
