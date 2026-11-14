@@ -84,6 +84,8 @@
   .dhead{display:flex;gap:12px;align-items:center;margin-bottom:10px}
   .dhead img{width:56px;height:56px;border-radius:50%;background:var(--card2)}
   .back{display:none;margin-bottom:10px}
+  .readystack{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+  .closebtn{float:right;min-height:36px;width:36px;padding:0;font-size:18px;line-height:1}
   .err{font-size:13px;color:var(--bad);margin:8px 0}
   .empty{text-align:center;padding:40px 16px}
   .settings{padding:16px;max-width:760px}
@@ -174,7 +176,7 @@ const SSO = "https://login.eveonline.com/v2/oauth";
 const ESI = "https://esi.evetech.net";
 const COMPAT_DATE = "2020-01-01";
 // ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
-const APP_ID = "EVE-Dashboard/1.6 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const APP_ID = "EVE-Dashboard/1.7 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
 const REFRESH_MS = 5 * 60 * 1000;
 
 /* ---------- Storage ---------- */
@@ -598,18 +600,23 @@ function rowStatus(x, acc){
 
 // Omega gold, as the game shows Omega status
 const OMEGA_GOLD = "#d9a520";
+const isAlpha = l => meta.omega[l] === "alpha";
 function omegaTile(all){
   const end = l => Date.parse(meta.omega[l] + "T11:00:00Z");
+  const accounts = [...new Set(all.map(x => x.account).filter(Boolean))];
+  const alphas = accounts.filter(isAlpha).sort(compareAccounts);
   // expired accounts are flagged in "Needs attention"; the tile shows the next one still to come
-  const labels = [...new Set(all.map(x => x.account).filter(Boolean))].filter(l => end(l) > Date.now());
-  if(!labels.length) return `<strong class="small">—</strong><span><a href="#accounts">Set Omega dates</a></span>`;
-  const l = labels.sort((a,b) => end(a) - end(b))[0], o = omegaInfo(l);
-  return `<strong style="color:${OMEGA_GOLD}">${o.days} day${o.days === 1 ? "" : "s"}</strong><span>${esc(l)}</span>`;
+  const upcoming = accounts.filter(l => !isAlpha(l) && end(l) > Date.now()).sort((a,b) => end(a) - end(b));
+  const alphaLine = alphas.length ? `<span>Alpha: ${alphas.map(esc).join(", ")}</span>` : "";
+  if(!upcoming.length) return `<strong class="small">—</strong>${alphaLine || `<span><a href="#accounts">Set Omega dates</a></span>`}`;
+  const l = upcoming[0], o = omegaInfo(l);
+  return `<strong style="color:${OMEGA_GOLD}">${o.days} day${o.days === 1 ? "" : "s"}</strong><span>${esc(l)}</span>${alphaLine}`;
 }
 
 function omegaInfo(label){
   const date = meta.omega[label];
   if(!label || !date) return null;
+  if(date === "alpha") return {cls:"c-mute", text:"Alpha"};
   const left = Date.parse(date + "T11:00:00Z") - Date.now();   // treat expiry as downtime (11:00 UTC) on that day
   if(left <= 0) return {cls:"c-bad", text:"Omega expired"};
   const days = Math.ceil(left / DAY);
@@ -657,7 +664,7 @@ function attentionHtml(all, acc){
   const stopped = accs.filter(a => a.stopped);
   const short = accs.filter(a => a.training && a.queueLeft < QUEUE_WARN_DAYS * DAY).sort((a,b) => a.queueLeft - b.queueLeft);
   const labels = [...new Set(all.map(x => x.account).filter(Boolean))];
-  const omegaSoon = labels.filter(l => { const o = omegaInfo(l); return o && o.cls !== "c-ok"; });
+  const omegaSoon = labels.filter(l => { const o = omegaInfo(l); return o && (o.cls === "c-warn" || o.cls === "c-bad"); });
   if(signin) items.push(`<span class="chip c-bad">${signin} need to sign in again</span>`);
   if(failing) items.push(`<span class="chip c-bad">${failing} couldn't load (retrying)</span>`);
   for(const a of stopped) items.push(`<span class="chip c-bad">${esc(a.label)}: not training</span>`);
@@ -698,9 +705,14 @@ function toolbarHtml(){
 function setSort(v){ sortBy = v; store.set("eve.sort", v); render(); }
 
 const cd = (t, style="") => `<span data-cd="${t}" style="${style}"></span>`;
+// one chip per job type with jobs ready, stacked manufacturing / research / reactions
+function readyChips(x, short){
+  return CATS.map(c => { const k = x.jobs.filter(j => j.state === "ready" && j.cat === c.k).length;
+    return k ? `<span class="chip sm" style="color:${c.color};background:${c.color}22">${k} ${short ? c.k : c.name.toLowerCase()} ready</span>` : ""; }).join("");
+}
 function industryCell(x){
   if(!x.hasJobs) return "—";
-  if(x.jobsReady) return `<span class="chip sm c-info">${x.jobsReady} ready</span>${x.jobsActive ? ` <span class="muted">+${x.jobsActive}</span>` : ""}`;
+  if(x.jobsReady) return `<div class="readystack">${readyChips(x)}</div>${x.jobsActive ? `<span class="muted" style="font-size:12px">+${x.jobsActive} running</span>` : ""}`;
   if(x.jobsActive) return `${x.jobsActive} · ${cd(x.nextJob)}`;
   return `<span class="muted">None</span>`;
 }
@@ -733,7 +745,7 @@ function rowHtml(x, acc, sel){
     <div class="d">${fatigueCell(x)}</div>
     <div class="m" style="flex-direction:column;align-items:flex-end;gap:4px">
       ${x.freeSP ? `<span class="chip sm c-ok">${fmtSP(x.freeSP)} free</span>` : ""}
-      ${x.jobsReady ? `<span class="chip sm c-info">${x.jobsReady} job${x.jobsReady>1?"s":""} ready</span>` : ""}
+      ${x.jobsReady ? readyChips(x, true) : ""}
       ${x.redLeft ? `<span class="chip sm c-bad">Red</span>` : x.blueLeft ? `<span class="chip sm c-info">Blue</span>` : ""}
     </div>
   </a>`;
@@ -809,7 +821,7 @@ function detailHtml(x){
     `<div class="clone"><div class="clonehead"><b>Current clone</b>${x.activeSig !== null ? nameBox(x.activeSig) : ""}</div>${x.hasImplants ? implantList(x.implants) : `<div class="kv"><span>Implants</span><span>—</span></div>`}</div>` +
     x.jumpClones.map(j => `<div class="clone"><div class="clonehead"><span class="ell muted" style="font-size:12px">${esc(j.location)}</span>${nameBox(j.sig)}</div>${implantList(implantsOf(j.implants))}</div>`).join("");
 
-  return `<a class="back" href="#">← Overview</a>
+  return `<button class="closebtn" aria-label="Close character details" onclick="location.hash=''">×</button><a class="back" href="#">← Overview</a>
     <div class="dhead"><img src="https://images.evetech.net/characters/${x.id}/portrait?size=128" alt="">
       <div style="min-width:0"><h2 class="ell">${esc(x.name)}</h2>
         <div class="muted" style="font-size:12px">${esc(x.corp || "")}${x.totalSP ? " · " + fmtSP(x.totalSP) + " SP" : ""}</div></div></div>
@@ -850,10 +862,11 @@ function accountsView(ids){
     <h2 style="margin-top:12px">Accounts</h2>
     <p class="muted" style="font-size:13px;margin:0 0 8px">EVE doesn't share account details with apps, so enter them here. Saved on this device only.
       Order numbers are optional: lower numbers show first; anything without a number goes after, alphabetically.</p>
-    <h3>Accounts: order, then Omega expiry date</h3>
+    <h3>Accounts: order, then Omega expiry date (or tick Alpha)</h3>
     ${acctLabels.length ? acctLabels.map((l,i) => `<div class="srow"><label for="ao_${i}">${esc(l)}</label>
       <input id="ao_${i}" type="number" min="1" inputmode="numeric" placeholder="#" aria-label="Order of ${esc(l)}" style="flex:0 0 76px" value="${val(meta.accountOrder[l])}" onchange="setAcctOrder(${i}, this.value)">
-      <input id="o_${i}" type="date" aria-label="Omega expiry for ${esc(l)}" value="${esc(meta.omega[l] || "")}" onchange="setOmega(${i}, this.value)"></div>`).join("")
+      <input id="o_${i}" type="date" aria-label="Omega expiry for ${esc(l)}" value="${isAlpha(l) ? "" : esc(meta.omega[l] || "")}" ${isAlpha(l) ? "disabled" : ""} onchange="setOmega(${i}, this.value)">
+      <label style="flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" ${isAlpha(l) ? "checked" : ""} onchange="setAlpha(${i}, this.checked)" style="min-height:0">Alpha</label></div>`).join("")
       : `<p class="muted" style="font-size:13px">Name your accounts below first.</p>`}
     <h3>Characters: account, order within the account, label</h3>
     <datalist id="acctList">${acctLabels.map(l => `<option value="${esc(l)}">`).join("")}</datalist>
@@ -875,6 +888,11 @@ function setLabel(id, v){ v = v.trim(); if(v) meta.charLabel[id] = v; else delet
 function setLabelColor(i, v){ const l = charLabels[i]; if(!l || !LABEL_COLORS[v]) return; meta.labelColor[l] = v; saveMeta(); render(); }
 function setCharOrder(id, v){ const n = cleanNum(v); if(n === undefined) delete meta.charOrder[id]; else meta.charOrder[id] = n; saveMeta(); render(); }
 function setAcctOrder(i, v){ const l = acctLabels[i]; if(!l) return; const n = cleanNum(v); if(n === undefined) delete meta.accountOrder[l]; else meta.accountOrder[l] = n; saveMeta(); render(); }
+function setAlpha(i, on){
+  const l = acctLabels[i]; if(!l) return;
+  if(on) meta.omega[l] = "alpha"; else delete meta.omega[l];
+  saveMeta(); render();
+}
 function setOmega(i, v){
   const l = acctLabels[i]; if(!l) return;
   if(v) meta.omega[l] = v; else delete meta.omega[l];
