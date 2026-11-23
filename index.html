@@ -188,7 +188,7 @@ const SSO = "https://login.eveonline.com/v2/oauth";
 const ESI = "https://esi.evetech.net";
 const COMPAT_DATE = "2020-01-01";
 // ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
-const APP_ID = "EVE-Dashboard/1.9 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const APP_ID = "EVE-Dashboard/1.10 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
 document.getElementById("ver").textContent = (APP_ID.match(/\/([\d.]+)/) || ["",""])[1].replace(/^(?=.)/, "v");   // footer label: which revision this device is running
 const REFRESH_MS = 5 * 60 * 1000;
 
@@ -695,7 +695,7 @@ function route(){ const h = location.hash; return h.startsWith("#c/") ? {view:"d
 // Background redraws wait while you're typing in a box, so what you type isn't wiped
 let pendingRender = false;
 function safeRender(){
-  if(document.activeElement?.tagName === "INPUT"){ pendingRender = true; return; }
+  if(["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)){ pendingRender = true; return; }
   render();
 }
 document.addEventListener("focusout", () => { if(pendingRender){ pendingRender = false; setTimeout(safeRender, 0); } });
@@ -993,7 +993,37 @@ function accountsView(ids){
     ${charLabels.length ? charLabels.map((l,i) => `<div class="srow"><label for="lc_${i}">${labelChip(l)}</label>
       <select id="lc_${i}" onchange="setLabelColor(${i}, this.value)">${Object.keys(LABEL_COLORS).map(c => `<option value="${c}" ${(meta.labelColor[l] || "gray") === c ? "selected" : ""}>${c[0].toUpperCase() + c.slice(1)}</option>`).join("")}</select></div>`).join("")
       : `<p class="muted" style="font-size:13px">Give characters a category above (e.g. "Main alliance", "Neutral alt") to pick its color here. On the overview, each character's row gets a colored left edge, with a key above the list.</p>`}
+    <h3>Copy these settings to another device</h3>
+    <p class="muted" style="font-size:13px;margin:0 0 8px">Copies everything on this page plus clone names. Logins are not included: sign characters in on each device.
+      <b>Export</b> here, send the text to the other device (e.g. email or a note to yourself), paste it into the box there and tap <b>Import</b>.</p>
+    <textarea id="metaIO" rows="4" style="width:100%;box-sizing:border-box;font-size:16px" placeholder="Paste exported settings here"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px"><button onclick="exportMeta()">Export</button><button onclick="importMeta()">Import</button><span class="muted" id="metaMsg" style="font-size:13px;align-self:center"></span></div>
   </div>`;
+}
+const META_KEYS = ["accountOf", "omega", "accountOrder", "charOrder", "charLabel", "labelColor", "cloneNames"];
+function exportMeta(){
+  const box = document.getElementById("metaIO"), msg = document.getElementById("metaMsg");
+  box.value = JSON.stringify({eveDashboardSettings:1, ...Object.fromEntries(META_KEYS.map(k => [k, meta[k] || {}]))});
+  box.select();
+  navigator.clipboard?.writeText(box.value).then(() => msg.textContent = "Copied.", () => msg.textContent = "Select the text and copy it.");
+}
+function importMeta(){
+  const msg = document.getElementById("metaMsg");
+  let x; try{ x = JSON.parse(document.getElementById("metaIO").value); }catch{ x = null; }
+  const plain = o => o && typeof o === "object" && !Array.isArray(o);
+  if(!plain(x) || x.eveDashboardSettings !== 1 || !META_KEYS.every(k => plain(x[k] ?? {}))){ msg.textContent = "That isn't exported dashboard settings."; return; }
+  if(!confirm("Replace ALL of this device's account settings with the imported ones? Anything set only on this device is lost.")) return;
+  const ok = {   // what each kind of setting may hold; anything else is dropped
+    accountOrder: v => typeof v === "number", charOrder: v => typeof v === "number",
+    omega: v => v === "alpha" || (/^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v))),
+    cloneNames: (v, k) => typeof v === "string" && /^[\d,]+$/.test(k),
+    labelColor: v => typeof v === "string" && !!LABEL_COLORS[v]
+  };
+  let n = 0;
+  for(const k of META_KEYS) meta[k] = Object.fromEntries(Object.entries(x[k] || {}).filter(([key, v]) =>
+    (ok[k] ? ok[k](v, key) : typeof v === "string" && v.trim() !== "") && ++n));
+  saveMeta(); render();
+  document.getElementById("metaMsg").textContent = `Imported ${n} settings.`;
 }
 function saveMeta(){ store.set("eve.meta", meta); }
 const cleanNum = v => { v = String(v).trim(); return v === "" || isNaN(v) ? undefined : Math.max(0, Math.round(+v)); };
