@@ -4,6 +4,8 @@ A personal, phone-friendly dashboard for EVE Online characters. One place to see
 
 **Live site:** https://duncansmithmt.github.io/EVE-Dashboard/
 
+**Which version am I running?** The version number (e.g. v1.9) is shown at the bottom of the page. If a device shows an older number than the latest upload, hard-refresh it (Ctrl+F5 on PC; on a phone, fully close and reopen the app). The number comes from `APP_ID` in `index.html`; bump it with every upload.
+
 ## What it shows (Phases 1–2, iteration 3)
 
 ### Overview
@@ -74,7 +76,7 @@ Rules the app follows:
 - **Caching:** the browser honours EVE's cache times (verified: repeating a request before it expires costs nothing and never reaches EVE).
 - **Backing off:** on 420 (error limit), 429 (rate limit) or 502–504 (EVE down), or when 10 or fewer errors remain in EVE's error window, **all** calls stop until EVE's stated reset time (60 s if it doesn't say). The header shows "Paused: … Resuming h:mm".
 - **No repeated failures:** a route refused with 403 for a character isn't asked again that session; a character whose login failed isn't loaded again until it signs in again; names EVE doesn't know are remembered as "Unknown".
-- **Identifies itself:** sends `X-User-Agent: EVE-Dashboard/1.1 (+repo URL)`, as EVE's best practices ask (browsers can't set `User-Agent`).
+- **Identifies itself:** sends `X-User-Agent: EVE-Dashboard/<version> (+repo URL)`, as EVE's best practices ask (browsers can't set `User-Agent`).
 - Login token refreshes go to EVE's login service, not ESI: about one per character every 20 minutes while in use.
 
 ## Setup reference
@@ -217,3 +219,4 @@ Kept in the project doc **long-term-features.md** (ideas and problems to tackle 
 ## Changelog
 
 - **2026-11-13:** First release: skill queue module. Reliability fixes from code review (iOS-safe login storage, single token refresh at a time, auto re-sync when a skill finishes). Expanded to all 75 scopes. Documented the login workaround. Captured the full capability list, manual account/Omega entry decision, and three layout mockups. Chose layout B + C's sorted views. **Phase 1 built:** overview/detail layout, sorted views, Accounts page (labels + Omega dates), wallet, location/ship, corporation; staggered loading; transient errors no longer ask to sign in again. **ESI usage audit:** verified EVE's per-route limits and cache behaviour; no polling while hidden; refresh 5 min after the last one finishes; skill completion redraws locally; pause on 420/429/502–504 or near the error limit; don't repeat refused calls or failed logins; X-User-Agent header. **Phase 2 built:** industry jobs, jump clone cooldown, blue (fatigue) / red (activation, upper bound) timers, implants, industry and fatigue views, account and character display order, default ship names hidden, failed optional data keeps its last value; **corporation-owned industry jobs** (read via a Factory Manager/director character, matched by installer); the overview's corporation column moved to the detail view to make room (as in mockup B). **Iteration 3:** collapsible detail sections; industry jobs grouped by manufacturing/research/reactions with game colors and slots in use/capacity (per character and totals); skill queue alerts per account (only when no character on the account trains) and queue-under-33-days alerts; shortest-account-queue tile; jump clone list with implants by slot and user-named clones (matched by implant set), current clone name on the overview; character labels with colors; new attention strip (free SP removed). Then: reactions colored teal (as in game); idle slots removed from the attention strip; structure timers removed and moved to the long-term features list. Then: industry tile shows full type names in larger text; ready-job alerts split by type and colored; "SP to finish" on the skill queue heading; label column replaced by a colored left edge per character; cosmetic implants labeled "Cosmetic". Fourth tile: next Omega expiry. Ready jobs split by type in the overview rows; × to close the character detail; Alpha option per account (listed in the Omega tile). **Iteration 4:** clickable "Needs attention" items; last login/logout in the detail; toasts when jump timers finish; one industry chip per job type with running/paused/ready; job drill-down with location and system cost indices; "labels" renamed to categories with a color key above the overview.
+- **2026-11-23 (v1.9):** version number shown at the bottom of the page, so each device shows which revision it is running.

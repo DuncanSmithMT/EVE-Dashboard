@@ -28,6 +28,7 @@
   button.danger{color:var(--bad)}
   select,input{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;min-height:40px}
   .muted{color:var(--muted)}
+  .ver{font-size:11px;color:var(--muted);text-align:center;padding:16px 0 8px;opacity:.7}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px}
   header.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
   header.top h1{font-size:20px;font-weight:600;margin:0}
@@ -128,6 +129,7 @@
   <div class="err" id="globalErr"></div>
   <div id="app"></div>
   <div id="toasts" aria-live="polite"></div>
+  <footer class="ver" id="ver"></footer>
 </div>
 
 <script>
@@ -186,7 +188,8 @@ const SSO = "https://login.eveonline.com/v2/oauth";
 const ESI = "https://esi.evetech.net";
 const COMPAT_DATE = "2020-01-01";
 // ESI best practice: identify the app. Browsers can't set User-Agent, so ESI accepts X-User-Agent.
-const APP_ID = "EVE-Dashboard/1.8 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+const APP_ID = "EVE-Dashboard/1.9 (+https://github.com/DuncanSmithMT/EVE-Dashboard)";
+document.getElementById("ver").textContent = (APP_ID.match(/\/([\d.]+)/) || ["",""])[1].replace(/^(?=.)/, "v");   // footer label: which revision this device is running
 const REFRESH_MS = 5 * 60 * 1000;
 
 /* ---------- Storage ---------- */
